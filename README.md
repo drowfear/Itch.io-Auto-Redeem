@@ -28,7 +28,7 @@ An automated Tampermonkey script designed to seamlessly claim free games, bundle
 1. Make sure you have a userscript manager installed in your browser:
    * **[Tampermonkey](https://www.tampermonkey.net/)** (Recommended)
 2. Click on the raw script link or download it from the repository:
-   * **[Install Script Directly (redeem-itch.user.js)](https://raw.githubusercontent.com/drowfear/YOUR_REPO_NAME/main/redeem-itch.user.js)** *(Replace `YOUR_REPO_NAME` with your actual GitHub repository name)*
+   * **[Install Script Directly (redeem-itch.user.js)](https://raw.githubusercontent.com/drowfear/Itch.io-Auto-Redeem/main/redeem-itch.user.js)**
 3. Tampermonkey will automatically prompt you to **Install** or **Update** the script.
 
 ---
