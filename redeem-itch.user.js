@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Redeem itch.io (English)
 // @namespace    Redeem-itch.io
-// @version      1.6.0
+// @version      1.7.3
 // @description  Automatically claim free game keys and claimable links on itch.io and external deal sites
 // @author       Drowfear (https://github.com/drowfear)
 // @iconURL      https://itch.io/favicon.ico
@@ -16,8 +16,7 @@
 // @supportURL   https://buymeacoffee.com/drowfear
 // @homepage     https://github.com/drowfear
 // @require      https://cdn.jsdelivr.net/npm/jquery@3.4.1/dist/jquery.slim.min.js
-// @require      https://cdn.jsdelivr.net/npm/sweetalert2@9
-// @require      https://cdn.jsdelivr.net/npm/promise-polyfill@8.1.3/dist/polyfill.min.js
+// @require      https://cdn.jsdelivr.net/npm/sweetalert2@11
 // @grant        GM_xmlhttpRequest
 // @grant        GM_registerMenuCommand
 // @grant        GM_openInTab
@@ -28,7 +27,7 @@
 // @connect      *.itch.io
 // ==/UserScript==
 
-/* global checkItchGame,MutationObserver */
+/* global checkItchGame, MutationObserver, Swal */
 /* eslint-disable camelcase */
 
 (function () {
@@ -37,51 +36,70 @@
   const closeWindow = true;
   const url = window.location.href;
 
-  // Inyectar el banner de inicio flotante permanente en el DOM
-  function createStartupBanner() {
-    if (document.getElementById('df-support-banner')) return;
-
-    const banner = document.createElement('div');
-    banner.id = 'df-support-banner';
-    banner.innerHTML = `
-      <div style="font-weight: bold; margin-bottom: 6px; font-size: 13px;">🎮 Itch.io Auto-Redeem Active</div>
-      <div style="font-size: 11px; margin-bottom: 8px; color: #ccc;">Created by Drowfear. Support this script:</div>
-      <div style="display: flex; gap: 6px; justify-content: center;">
-        <a href="https://buymeacoffee.com/drowfear" target="_blank" style="background: #FF813F; color: #fff; padding: 4px 8px; border-radius: 4px; text-decoration: none; font-size: 11px; font-weight: bold;">☕ Buy Coffee</a>
-        <a href="https://ko-fi.com/drowfear" target="_blank" style="background: #FF5E5B; color: #fff; padding: 4px 8px; border-radius: 4px; text-decoration: none; font-size: 11px; font-weight: bold;">❤️ Ko-fi</a>
-      </div>
-      <button id="df-close-banner" style="position: absolute; top: 4px; right: 6px; background: none; border: none; color: #aaa; cursor: pointer; font-size: 12px;">✕</button>
-    `;
-
-    document.body.appendChild(banner);
-
-    document.getElementById('df-close-banner').onclick = function () {
-      banner.remove();
-    };
-  }
-
-  // Estilos CSS para asegurarnos de que el banner siempre resalte por encima de cualquier web
+  // Estilos CSS para el Banner (Arriba a la derecha) y SweetAlert2 Modern Dark Mode
   GM_addStyle(`
     #df-support-banner {
-      position: fixed;
-      bottom: 20px;
-      right: 20px;
-      z-index: 999999;
-      background: #1a1a1a;
-      color: #ffffff;
-      padding: 12px 16px;
-      border-radius: 8px;
-      box-shadow: 0 4px 15px rgba(0,0,0,0.4);
-      font-family: Arial, sans-serif;
-      text-align: center;
-      min-width: 200px;
-      border: 1px solid #333;
+      position: fixed !important;
+      top: 20px !important;
+      right: 20px !important;
+      z-index: 999999 !important;
+      background: #18181b !important;
+      color: #f4f4f5 !important;
+      padding: 14px 18px !important;
+      border-radius: 12px !important;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.1) !important;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+      text-align: center !important;
+      min-width: 230px !important;
+      border: 2px solid #fa4056 !important;
     }
-    .swal2-title.break-all { word-wrap: break-word; word-break: break-all; }
-  `);
 
-  // Mostrar el banner de inicio
-  createStartupBanner();
+    #df-support-banner a:hover {
+      opacity: 0.85;
+    }
+
+    .swal2-popup {
+      background: #18181b !important;
+      color: #f4f4f5 !important;
+      border-radius: 16px !important;
+      border: 1px solid #27272a !important;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5) !important;
+    }
+    .swal2-title {
+      color: #ffffff !important;
+      font-weight: 700 !important;
+      font-size: 1.25rem !important;
+    }
+    .swal2-content, .swal2-html-container {
+      color: #e4e4e7 !important;
+      font-size: 0.95rem !important;
+    }
+    .swal2-content a, .swal2-html-container a {
+      color: #38bdf8 !important;
+      word-break: break-all;
+    }
+    .swal2-styled.swal2-confirm {
+      background-color: #fa4056 !important;
+      border-radius: 8px !important;
+      font-weight: 600 !important;
+      padding: 8px 24px !important;
+      border: none !important;
+      box-shadow: none !important;
+    }
+    .swal2-icon.swal2-info {
+      border-color: #38bdf8 !important;
+      color: #38bdf8 !important;
+    }
+    .swal2-icon.swal2-success {
+      border-color: #22c55e !important;
+      color: #22c55e !important;
+    }
+    .swal2-icon.swal2-error {
+      border-color: #ef4444 !important;
+      color: #ef4444 !important;
+    }
+  `);
 
   // Comandos del menú de Tampermonkey
   GM_registerMenuCommand('☕ Support My Work (Buy Me a Coffee)', () => {
@@ -90,19 +108,8 @@
   GM_registerMenuCommand('❤️ Support My Work (Ko-fi)', () => {
     GM_openInTab('https://ko-fi.com/drowfear', { active: true });
   });
-
   GM_registerMenuCommand('Extract All Itch Links', async () => {
-    log('Extracting game links, please wait...');
-    let gamesLink = [];
-    for (const e of $('a[href*="itch.io"]:not(".itch-io-game-link-owned"):not([href*="itch.io/b/"]):not([href*="itch.io/c/"])')) {
-      const links = await getUrlLink(e);
-      gamesLink = [...gamesLink, ...links];
-    }
-    gamesLink = [...new Set(gamesLink)];
-    for (const e of gamesLink) {
-      await isOwn(e);
-    }
-    log('All games processed!', 'success');
+    await processAllPageLinks();
   });
 
   /** ************************* Automatic Download Link Claiming ***************************/
@@ -186,6 +193,7 @@
       title: type === 'success' ? 'Success!' : type === 'error' ? 'Error' : 'Notice',
       html: msg,
       icon: type,
+      showConfirmButton: true,
       customClass: {
         title: 'break-all'
       }
@@ -200,6 +208,38 @@
       default: color += 'black';
     }
     console.log(`%c[Redeem itch.io] ${msg}`, color);
+  }
+
+  async function processAllPageLinks() {
+    // Retardo asíncrono para obligar al navegador a repintar el DOM/SweetAlert antes de escanear
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const rawLinks = $('a[href*="itch.io"]:not(".itch-io-game-link-owned"):not([href*="itch.io/b/"]):not([href*="itch.io/c/"])').toArray();
+
+    if (rawLinks.length === 0) {
+      log('No valid itch.io links found on this page.', 'warning');
+      return;
+    }
+
+    let gamesLink = [];
+    for (let i = 0; i < rawLinks.length; i++) {
+      log(`Scanning link ${i + 1} of ${rawLinks.length}...`);
+      const links = await getUrlLink(rawLinks[i]);
+      gamesLink = [...gamesLink, ...links];
+    }
+
+    gamesLink = [...new Set(gamesLink)];
+
+    if (gamesLink.length === 0) {
+      log('No claimable games found in the extracted links.', 'warning');
+      return;
+    }
+
+    for (const e of gamesLink) {
+      await isOwn(e);
+    }
+
+    log('All games processed!', 'success');
   }
 
   async function getUrlLink(e) {
@@ -416,4 +456,68 @@
         return httpRequest(option, ++i);
       });
   }
+
+  // Banner flotante superior permanente con feedback visual e icono de carga instantáneo
+  function createStartupBanner() {
+    if (document.getElementById('df-support-banner')) return;
+
+    const banner = document.createElement('div');
+    banner.id = 'df-support-banner';
+    banner.innerHTML = `
+      <div style="font-weight: bold; margin-bottom: 6px; font-size: 13px; color: #ffffff;">🎮 Itch.io Auto-Redeem Active</div>
+      <div style="font-size: 11px; margin-bottom: 8px; color: #a1a1aa;">Created by Drowfear</div>
+      <button id="df-claim-all-btn" style="width: 100%; background: #fa4056; color: #fff; border: none; padding: 6px 10px; border-radius: 6px; font-size: 11px; font-weight: bold; cursor: pointer; margin-bottom: 8px; transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 6px;">
+        <span id="df-btn-text">⚡ Claim All Links On Page</span>
+      </button>
+      <div style="display: flex; gap: 6px; justify-content: center;">
+        <a href="https://buymeacoffee.com/drowfear" target="_blank" style="background: #FF813F; color: #fff; padding: 4px 8px; border-radius: 6px; text-decoration: none; font-size: 11px; font-weight: bold;">☕ Coffee</a>
+        <a href="https://ko-fi.com/drowfear" target="_blank" style="background: #FF5E5B; color: #fff; padding: 4px 8px; border-radius: 6px; text-decoration: none; font-size: 11px; font-weight: bold;">❤️ Ko-fi</a>
+      </div>
+      <button id="df-close-banner" style="position: absolute; top: 6px; right: 8px; background: none; border: none; color: #71717a; cursor: pointer; font-size: 14px; font-weight: bold;">✕</button>
+    `;
+
+    document.body.appendChild(banner);
+
+    document.getElementById('df-close-banner').onclick = function () {
+      banner.remove();
+    };
+
+    const claimBtn = document.getElementById('df-claim-all-btn');
+    const btnText = document.getElementById('df-btn-text');
+
+    claimBtn.onclick = async function () {
+      // 1. Deshabilitar el botón en el banner
+      claimBtn.disabled = true;
+      claimBtn.style.opacity = '0.7';
+      claimBtn.style.cursor = 'not-allowed';
+      btnText.innerHTML = '⏳ Processing...';
+
+      // 2. Feedback visual INSTANTÁNEO
+      Swal.fire({
+        title: 'Scanning Page...',
+        html: 'Searching for valid itch.io links and processing claims.',
+        icon: 'info',
+        allowOutsideClick: false,
+        showConfirmButton: false,
+        didOpen: () => {
+          Swal.showLoading();
+        }
+      });
+
+      try {
+        await processAllPageLinks();
+      } catch (err) {
+        console.error(err);
+        log('An error occurred during extraction.', 'error');
+      } finally {
+        // 3. Restaurar estado original del botón
+        claimBtn.disabled = false;
+        claimBtn.style.opacity = '1';
+        claimBtn.style.cursor = 'pointer';
+        btnText.innerHTML = '⚡ Claim All Links On Page';
+      }
+    };
+  }
+
+  createStartupBanner();
 }());
