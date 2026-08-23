@@ -1,10 +1,9 @@
-/* eslint-disable max-len,no-plusplus,no-param-reassign,new-cap,func-style */
 // ==UserScript==
 // @name         Redeem itch.io (English)
 // @namespace    Redeem-itch.io
-// @version      1.1.0
+// @version      1.6.0
 // @description  Automatically claim free game keys and claimable links on itch.io and external deal sites
-// @author       Drowfear
+// @author       Drowfear (https://github.com/drowfear)
 // @iconURL      https://itch.io/favicon.ico
 // @include      *://*itch.io/*
 // @include      *://keylol.com/*
@@ -15,7 +14,7 @@
 // @include      *://itchclaim.tmbpeter.com/*
 // @include      *://shaigrorb.github.io/freetchio/*
 // @supportURL   https://buymeacoffee.com/drowfear
-// @homepage     https://ko-fi.com/drowfear
+// @homepage     https://github.com/drowfear
 // @require      https://cdn.jsdelivr.net/npm/jquery@3.4.1/dist/jquery.slim.min.js
 // @require      https://cdn.jsdelivr.net/npm/sweetalert2@9
 // @require      https://cdn.jsdelivr.net/npm/promise-polyfill@8.1.3/dist/polyfill.min.js
@@ -35,20 +34,61 @@
 (function () {
   'use strict';
 
-  const closeWindow = true; // Auto-close page when finished. Set to 'false' to keep it open.
+  const closeWindow = true;
   const url = window.location.href;
 
-  const DONATION_FOOTER = `
-    <div style="margin-top: 15px; padding-top: 10px; border-top: 1px solid #eee; font-size: 13px; color: #555;">
-      If you like my work, please consider supporting me: <br/>
-      ☕ <b><a href="https://buymeacoffee.com/drowfear" target="_blank" style="color: #FF813F; text-decoration: none;">Buy Me a Coffee</a></b> | 
-      ❤️ <b><a href="https://ko-fi.com/drowfear" target="_blank" style="color: #FF5E5B; text-decoration: none;">Ko-fi</a></b>
-    </div>
-  `;
+  // Inyectar el banner de inicio flotante permanente en el DOM
+  function createStartupBanner() {
+    if (document.getElementById('df-support-banner')) return;
 
-  // Register Menu Commands
-  GM_registerMenuCommand('☕ Support My Work', () => {
+    const banner = document.createElement('div');
+    banner.id = 'df-support-banner';
+    banner.innerHTML = `
+      <div style="font-weight: bold; margin-bottom: 6px; font-size: 13px;">🎮 Itch.io Auto-Redeem Active</div>
+      <div style="font-size: 11px; margin-bottom: 8px; color: #ccc;">Created by Drowfear. Support this script:</div>
+      <div style="display: flex; gap: 6px; justify-content: center;">
+        <a href="https://buymeacoffee.com/drowfear" target="_blank" style="background: #FF813F; color: #fff; padding: 4px 8px; border-radius: 4px; text-decoration: none; font-size: 11px; font-weight: bold;">☕ Buy Coffee</a>
+        <a href="https://ko-fi.com/drowfear" target="_blank" style="background: #FF5E5B; color: #fff; padding: 4px 8px; border-radius: 4px; text-decoration: none; font-size: 11px; font-weight: bold;">❤️ Ko-fi</a>
+      </div>
+      <button id="df-close-banner" style="position: absolute; top: 4px; right: 6px; background: none; border: none; color: #aaa; cursor: pointer; font-size: 12px;">✕</button>
+    `;
+
+    document.body.appendChild(banner);
+
+    document.getElementById('df-close-banner').onclick = function () {
+      banner.remove();
+    };
+  }
+
+  // Estilos CSS para asegurarnos de que el banner siempre resalte por encima de cualquier web
+  GM_addStyle(`
+    #df-support-banner {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      z-index: 999999;
+      background: #1a1a1a;
+      color: #ffffff;
+      padding: 12px 16px;
+      border-radius: 8px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.4);
+      font-family: Arial, sans-serif;
+      text-align: center;
+      min-width: 200px;
+      border: 1px solid #333;
+    }
+    .swal2-title.break-all { word-wrap: break-word; word-break: break-all; }
+  `);
+
+  // Mostrar el banner de inicio
+  createStartupBanner();
+
+  // Comandos del menú de Tampermonkey
+  GM_registerMenuCommand('☕ Support My Work (Buy Me a Coffee)', () => {
     GM_openInTab('https://buymeacoffee.com/drowfear', { active: true });
+  });
+  GM_registerMenuCommand('❤️ Support My Work (Ko-fi)', () => {
+    GM_openInTab('https://ko-fi.com/drowfear', { active: true });
   });
 
   GM_registerMenuCommand('Extract All Itch Links', async () => {
@@ -62,7 +102,7 @@
     for (const e of gamesLink) {
       await isOwn(e);
     }
-    log('All games processed!', 'success', true);
+    log('All games processed!', 'success');
   });
 
   /** ************************* Automatic Download Link Claiming ***************************/
@@ -103,7 +143,7 @@
       for (const e of gameLink) {
         await redeemGame(e);
       }
-      log('Bundle processing completed!', 'success', true);
+      log('Bundle processing completed!', 'success');
     });
   }
 
@@ -139,14 +179,12 @@
     window.close();
   }
 
-  function log(msg, type = 'info', showDonation = false) {
+  function log(msg, type = 'info') {
     if (typeof msg !== 'string') return console.log(msg);
-
-    const htmlContent = showDonation ? `${msg}${DONATION_FOOTER}` : msg;
 
     Swal[$('.swal2-container').length > 0 ? 'update' : 'fire']({
       title: type === 'success' ? 'Success!' : type === 'error' ? 'Error' : 'Notice',
-      html: htmlContent,
+      html: msg,
       icon: type,
       customClass: {
         title: 'break-all'
@@ -220,7 +258,7 @@
           for (const g of games) {
             await isOwn(g.href);
           }
-          log('Finished processing bundle!', 'success', true);
+          log('Finished processing bundle!', 'success');
         }
       } else {
         log('Request error!', 'error');
@@ -239,7 +277,7 @@
     const data = await httpRequest({ url, method: 'get' });
     if (data.status === 200) {
       if (data.responseText.includes('purchase_banner_inner')) {
-        log('You already own this game!', 'success', true);
+        log('You already own this game!', 'success');
       } else {
         await purchase(url);
       }
@@ -313,7 +351,7 @@
       const claimBtn = html.find('button.button:contains("Link"),button.button:contains("Claim"),button.button:contains("链接"),button.button:contains("Vincular"),button.button:contains("Reclamar")');
       const form = html.find('form[action*="claim-key"]');
       if (/This page is linked|此页面已链接到帐户|Esta página está vinculada/gim.test(html.find('div.inner_column').text()) || html.find('a.button.download_btn[data-upload_id]').length > 0) {
-        log('Successfully claimed!', 'success', true);
+        log('Successfully claimed!', 'success');
       } else if (form.length > 0) {
         const actionUrl = form.attr('action');
         const csrf_token = form.find('input[name="csrf_token"]').val();
@@ -326,7 +364,7 @@
       } else if (data.finalUrl.includes('/register')) {
         log('Claim failed, please log in to itch.io first!', 'error');
       } else {
-        log('Process completed with unknown result.', 'success', true);
+        log('Process completed with unknown result.', 'success');
       }
     } else {
       log('Request error!', 'error');
@@ -351,9 +389,9 @@
     if (data.status === 200 && data.responseText) {
       const html = $(data.responseText);
       if (/This page is linked|此页面已链接到帐户|Esta página está vinculada/gim.test(html.find('div.inner_column').text()) || html.find('a.button.download_btn[data-upload_id]').length > 0) {
-        log('Successfully claimed!', 'success', true);
+        log('Successfully claimed!', 'success');
       } else {
-        log('Process completed with unknown result.', 'success', true);
+        log('Process completed with unknown result.', 'success');
       }
     } else if (data.finalUrl.includes('/register')) {
       log('Please log in first!', 'error');
@@ -378,6 +416,4 @@
         return httpRequest(option, ++i);
       });
   }
-
-  GM_addStyle('.swal2-title.break-all{word-wrap:break-word; word-break:break-all;}');
 }());
