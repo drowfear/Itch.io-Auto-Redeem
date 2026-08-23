@@ -1,5 +1,8 @@
 # Itch.io Auto-Redeem (English)
 
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Donate-yellow.svg?style=for-the-badge&logo=buy-me-a-coffee)](https://buymeacoffee.com/drowfear)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support-ff5e5b.svg?style=for-the-badge&logo=ko-fi)](https://ko-fi.com/drowfear)
+
 An automated Tampermonkey script designed to seamlessly claim free games, bundles, and claimable keys on **itch.io** and supported external deal aggregation platforms.
 
 ---
