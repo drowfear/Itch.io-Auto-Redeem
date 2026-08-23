@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Redeem itch.io (English)
 // @namespace    Redeem-itch.io
-// @version      1.0.0
+// @version      1.1.0
 // @description  Automatically claim free game keys and claimable links on itch.io and external deal sites
 // @author       Drowfear
 // @iconURL      https://itch.io/favicon.ico
