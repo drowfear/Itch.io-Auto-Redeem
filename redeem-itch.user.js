@@ -9,8 +9,6 @@
 // @include      *://keylol.com/*
 // @include      *://www.steamgifts.com/discussion/*
 // @include      *://www.reddit.com/r/*
-// @include      *://new.isthereanydeal.com/deals/*
-// @include      *://freegames.codes/game/*
 // @include      *://itchclaim.tmbpeter.com/*
 // @include      *://shaigrorb.github.io/freetchio/*
 // @supportURL   https://buymeacoffee.com/drowfear
@@ -1216,8 +1214,6 @@
     'keylol.com',
     'www.steamgifts.com',
     'www.reddit.com',
-    'new.isthereanydeal.com',
-    'freegames.codes',
     'itchclaim.tmbpeter.com',
     'shaigrorb.github.io'
   ];
