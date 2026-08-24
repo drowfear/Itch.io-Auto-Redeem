@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Redeem itch.io (English)
 // @namespace    Redeem-itch.io
-// @version      1.7.3
+// @version      2.0.0 Final
 // @description  Automatically claim free game keys and claimable links on itch.io and external deal sites
 // @author       Drowfear (https://github.com/drowfear)
 // @iconURL      https://itch.io/favicon.ico
@@ -25,18 +25,20 @@
 // @run-at       document-end
 // @connect      itch.io
 // @connect      *.itch.io
+// @connect      itch.zone
+// @connect      *.itch.zone
 // ==/UserScript==
 
-/* global checkItchGame, MutationObserver, Swal */
+/* global $, MutationObserver, Swal, GM_xmlhttpRequest, GM_registerMenuCommand */
+/* global GM_openInTab, GM_addStyle, unsafeWindow, checkItchGame */
 /* eslint-disable camelcase */
 
 (function () {
   'use strict';
 
   const closeWindow = true;
-  const url = window.location.href;
+  const currentUrl = window.location.href;
 
-  // Estilos CSS para el Banner (Arriba a la derecha) y SweetAlert2 Modern Dark Mode
   GM_addStyle(`
     #df-support-banner {
       position: fixed !important;
@@ -47,8 +49,15 @@
       color: #f4f4f5 !important;
       padding: 14px 18px !important;
       border-radius: 12px !important;
-      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.1) !important;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+      box-shadow:
+        0 10px 25px -5px rgba(0, 0, 0, 0.6),
+        0 0 0 1px rgba(255, 255, 255, 0.1) !important;
+      font-family:
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        Roboto,
+        sans-serif !important;
       text-align: center !important;
       min-width: 230px !important;
       border: 2px solid #fa4056 !important;
@@ -63,22 +72,33 @@
       color: #f4f4f5 !important;
       border-radius: 16px !important;
       border: 1px solid #27272a !important;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+      font-family:
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        Roboto,
+        sans-serif !important;
       box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5) !important;
     }
+
     .swal2-title {
       color: #ffffff !important;
       font-weight: 700 !important;
       font-size: 1.25rem !important;
     }
-    .swal2-content, .swal2-html-container {
+
+    .swal2-content,
+    .swal2-html-container {
       color: #e4e4e7 !important;
       font-size: 0.95rem !important;
     }
-    .swal2-content a, .swal2-html-container a {
+
+    .swal2-content a,
+    .swal2-html-container a {
       color: #38bdf8 !important;
       word-break: break-all;
     }
+
     .swal2-styled.swal2-confirm {
       background-color: #fa4056 !important;
       border-radius: 8px !important;
@@ -87,96 +107,405 @@
       border: none !important;
       box-shadow: none !important;
     }
+
     .swal2-icon.swal2-info {
       border-color: #38bdf8 !important;
       color: #38bdf8 !important;
     }
+
     .swal2-icon.swal2-success {
       border-color: #22c55e !important;
       color: #22c55e !important;
     }
+
     .swal2-icon.swal2-error {
       border-color: #ef4444 !important;
       color: #ef4444 !important;
     }
+
+    .swal2-icon.swal2-warning {
+      border-color: #f59e0b !important;
+      color: #f59e0b !important;
+    }
+
+    .df-redeem-link {
+      cursor: pointer;
+    }
   `);
 
-  // Comandos del menú de Tampermonkey
   GM_registerMenuCommand('☕ Support My Work (Buy Me a Coffee)', () => {
     GM_openInTab('https://buymeacoffee.com/drowfear', { active: true });
   });
+
   GM_registerMenuCommand('❤️ Support My Work (Ko-fi)', () => {
     GM_openInTab('https://ko-fi.com/drowfear', { active: true });
   });
+
   GM_registerMenuCommand('Extract All Itch Links', async () => {
     await processAllPageLinks();
   });
 
-  /** ************************* Automatic Download Link Claiming ***************************/
-  if (/^https?:\/\/[\w\W]{1,}\.itch\.io\/[\w]{1,}(-[\w]{1,}){0,}\/download\/[\w\W]{0,}/i.test(url)) {
-    $('button.button').map((i, e) => {
-      if (/link|claim|链接|vincular|reclamar/gim.test($(e).text())) e.click();
-      return e;
+  /**
+   * Escapa texto antes de introducirlo en el HTML de SweetAlert.
+   */
+  function escapeHtml(value) {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  /**
+   * Convierte y valida una URL de itch.io.
+   */
+  function normalizeItchUrl(value, base = window.location.href) {
+    if (!value) return null;
+
+    try {
+      const parsedUrl = new URL(String(value).trim(), base);
+
+      if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+        return null;
+      }
+
+      const hostname = parsedUrl.hostname.toLowerCase();
+
+      if (hostname !== 'itch.io' && !hostname.endsWith('.itch.io')) {
+        return null;
+      }
+
+      parsedUrl.hash = '';
+      return parsedUrl.href;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function isItchBundleUrl(value) {
+    const normalizedUrl = normalizeItchUrl(value);
+    if (!normalizedUrl) return false;
+
+    const parsedUrl = new URL(normalizedUrl);
+    return (
+      ['itch.io', 'www.itch.io'].includes(parsedUrl.hostname.toLowerCase()) &&
+      /^\/s\/\d+\/[^/]+\/?$/i.test(parsedUrl.pathname)
+    );
+  }
+
+  function isItchGameUrl(value) {
+    const normalizedUrl = normalizeItchUrl(value);
+    if (!normalizedUrl) return false;
+
+    const parsedUrl = new URL(normalizedUrl);
+    const hostname = parsedUrl.hostname.toLowerCase();
+
+    if (hostname === 'itch.io' || hostname === 'www.itch.io') {
+      return false;
+    }
+
+    return /^\/[^/]+(?:\/purchase)?\/?$/i.test(parsedUrl.pathname);
+  }
+
+  function isItchDownloadUrl(value) {
+    const normalizedUrl = normalizeItchUrl(value);
+    if (!normalizedUrl) return false;
+
+    const parsedUrl = new URL(normalizedUrl);
+    const hostname = parsedUrl.hostname.toLowerCase();
+
+    return (
+      hostname.endsWith('.itch.io') &&
+      /^\/[^/]+\/download\/.*$/i.test(parsedUrl.pathname)
+    );
+  }
+
+  function getGameBaseUrl(value) {
+    const normalizedUrl = normalizeItchUrl(value);
+    if (!normalizedUrl) return null;
+
+    const parsedUrl = new URL(normalizedUrl);
+    parsedUrl.pathname = parsedUrl.pathname
+      .replace(/\/purchase\/?$/i, '')
+      .replace(/\/+$/, '');
+
+    parsedUrl.search = '';
+    parsedUrl.hash = '';
+
+    return parsedUrl.href.replace(/\/$/, '');
+  }
+
+  function getPurchaseUrl(value) {
+    const normalizedUrl = normalizeItchUrl(value);
+    if (!normalizedUrl) return null;
+
+    const parsedUrl = new URL(normalizedUrl);
+
+    if (/\/purchase\/?$/i.test(parsedUrl.pathname)) {
+      return parsedUrl.href;
+    }
+
+    parsedUrl.pathname = `${parsedUrl.pathname.replace(/\/+$/, '')}/purchase`;
+    parsedUrl.search = '';
+    parsedUrl.hash = '';
+
+    return parsedUrl.href;
+  }
+
+  function isFreeCheckout(html) {
+    const priceText = html
+      .find('.button_message')
+      .eq(0)
+      .find('.dollars[itemprop]')
+      .text();
+
+    const placeholder = html.find('.money_input').attr('placeholder') || '';
+
+    const buyMessage = html
+      .find('.button_message')
+      .eq(0)
+      .find('.buy_message')
+      .text();
+
+    return (
+      /(?:^|\D)0\.00(?:\D|$)/i.test(priceText) ||
+      /(?:^|\D)0\.00(?:\D|$)/i.test(placeholder) ||
+      /自己出价|Name your own price|Pon tu propio precio/i.test(buyMessage)
+    );
+  }
+
+  /**
+   * Automatic download-link claiming.
+   */
+  if (isItchDownloadUrl(currentUrl)) {
+    $('button.button').each((index, element) => {
+      const buttonText = $(element).text();
+
+      if (/link|claim|链接|vincular|reclamar/i.test(buttonText)) {
+        element.click();
+      }
     });
-    if ((/This page is linked|此页面已链接到帐户|Esta página está vinculada/gim.test($('div.inner_column').text()) || $('a.button.download_btn[data-upload_id]').length > 0) && closeWindow === true) {
+
+    const pageIsLinked =
+      /This page is linked|此页面已链接到帐户|Esta página está vinculada/i.test(
+        $('div.inner_column').text()
+      );
+
+    const downloadIsAvailable =
+      $('a.button.download_btn[data-upload_id]').length > 0;
+
+    if ((pageIsLinked || downloadIsAvailable) && closeWindow) {
       closePage();
     }
   }
 
-  /** ********************* Claim Free Itch.io Games ***************************/
-  if (/^https?:\/\/.*?itch\.io\/.*?\/purchase(\?.*?)?$/.test(url) && /No thanks, just take me to the downloads|不用了，请带 me 去下载页面|No gracias, llévame a las descargas/i.test($('a.direct_download_btn').text())) {
-    $('a.direct_download_btn')[0].click();
-  } else if (
-    $('.purchase_banner_inner').length === 0 &&
-    (
-      /0\.00/gim.test($('.button_message').eq(0).find('.dollars[itemprop]').text()) ||
-      /0\.00/gim.test($('.money_input').attr('placeholder')) ||
-      /自己出价|Name your own price|Pon tu propio precio/gim.test($('.button_message').eq(0).find('.buy_message').text())
+  /**
+   * Claim free itch.io games.
+   */
+  const currentNormalizedUrl = normalizeItchUrl(currentUrl);
+
+  if (
+    currentNormalizedUrl &&
+    /\/purchase\/?$/i.test(new URL(currentNormalizedUrl).pathname) &&
+    /No thanks, just take me to the downloads|不用了，请带我去下载页面|No gracias, llévame a las descargas/i.test(
+      $('a.direct_download_btn').text()
     )
   ) {
-    $('.buy_btn').after(`<a data-itch-href="${$('.buy_btn').attr('href')}" href="javascript:void(0)" onclick="redeemItchGame(this)" target="_self" class="button" one-link-mark="yes" title="Claim in background">Claim in Background</a>`);
-  }
+    const directDownloadButton = $('a.direct_download_btn').get(0);
 
-  /** ********************** Temporary Bundles *****************************/
-  if (/https?:\/\/itch.io\/s\/[\d]{1,}\/[\w\W]{1,}/.test(url)) {
-    if ($('.promotion_buy_row .buy_game_btn').length > 0) {
-      $('.promotion_buy_row .buy_game_btn').after('<button id="redeem-itch-io" class="button" style="font-size:18px;letter-spacing:0.025em;line-height:36px;height:40px;padding:0 20px;margin:0 16px">Claim in Background</button>');
-    } else {
-      $('.countdown_row').prepend('<div style="width: 100%"><button id="redeem-itch-io" class="button" style="font-size:18px;letter-spacing:0.025em;line-height:36px;padding:0 20px;margin: 10px 30%;width: 40%;">Claim in Background</button></div>');
+    if (directDownloadButton) {
+      directDownloadButton.click();
     }
+  } else if (
+    isItchGameUrl(currentUrl) &&
+    $('.purchase_banner_inner').length === 0 &&
+    isFreeCheckout($(document))
+  ) {
+    const buyButton = $('.buy_btn').first();
+    const purchaseHref = normalizeItchUrl(
+      buyButton.attr('href'),
+      window.location.href
+    );
 
-    $('#redeem-itch-io').click(async () => {
-      const gameLink = $('.thumb_link.game_link');
-      for (const e of gameLink) {
-        await redeemGame(e);
-      }
-      log('Bundle processing completed!', 'success');
-    });
+    if (
+      buyButton.length > 0 &&
+      purchaseHref &&
+      $('.df-background-claim-button').length === 0
+    ) {
+      const backgroundClaimButton = $('<a>', {
+        href: '#',
+        class: 'button df-background-claim-button df-redeem-link',
+        target: '_self',
+        title: 'Claim in background',
+        text: 'Claim in Background'
+      });
+
+      backgroundClaimButton.attr('data-itch-href', purchaseHref);
+
+      backgroundClaimButton.on('click', async (event) => {
+        event.preventDefault();
+        await redeemGame(purchaseHref);
+      });
+
+      buyButton.after(backgroundClaimButton);
+    }
   }
 
-  /** ********************** Claim from External Sites *****************************/
-  if (['keylol.com', 'www.steamgifts.com', 'www.reddit.com', 'new.isthereanydeal.com', 'freegames.codes', 'itchclaim.tmbpeter.com', 'shaigrorb.github.io'].includes(window.location.hostname)) {
+  /**
+   * Temporary bundles.
+   */
+  if (isItchBundleUrl(currentUrl)) {
+    if ($('#redeem-itch-io').length === 0) {
+      const bundleButton = $(
+        '<button>',
+        {
+          id: 'redeem-itch-io',
+          class: 'button',
+          type: 'button',
+          text: 'Claim in Background'
+        }
+      );
+
+      if ($('.promotion_buy_row .buy_game_btn').length > 0) {
+        bundleButton.attr(
+          'style',
+          [
+            'font-size:18px',
+            'letter-spacing:0.025em',
+            'line-height:36px',
+            'height:40px',
+            'padding:0 20px',
+            'margin:0 16px'
+          ].join(';')
+        );
+
+        $('.promotion_buy_row .buy_game_btn').after(bundleButton);
+      } else {
+        bundleButton.attr(
+          'style',
+          [
+            'font-size:18px',
+            'letter-spacing:0.025em',
+            'line-height:36px',
+            'padding:0 20px',
+            'margin:10px 30%',
+            'width:40%'
+          ].join(';')
+        );
+
+        const buttonContainer = $('<div>', {
+          style: 'width:100%;'
+        }).append(bundleButton);
+
+        $('.countdown_row').prepend(buttonContainer);
+      }
+
+      bundleButton.on('click', async () => {
+        const gameLinks = $('.thumb_link.game_link').toArray();
+
+        bundleButton.prop('disabled', true);
+
+        try {
+          for (const gameLink of gameLinks) {
+            await redeemGame(gameLink);
+          }
+
+          log('Bundle processing completed!', 'success');
+        } finally {
+          bundleButton.prop('disabled', false);
+        }
+      });
+    }
+  }
+
+  /**
+   * Claim links from external sites.
+   */
+  const supportedExternalHosts = [
+    'keylol.com',
+    'www.steamgifts.com',
+    'www.reddit.com',
+    'new.isthereanydeal.com',
+    'freegames.codes',
+    'itchclaim.tmbpeter.com',
+    'shaigrorb.github.io'
+  ];
+
+  if (supportedExternalHosts.includes(window.location.hostname)) {
     addRedeemBtn();
-    const observer = new MutationObserver(addRedeemBtn);
+
+    const observer = new MutationObserver(() => {
+      addRedeemBtn();
+    });
+
     observer.observe(document.documentElement, {
-      attributes: true,
-      characterData: true,
       childList: true,
       subtree: true
     });
   }
 
   function addRedeemBtn() {
-    for (const e of $('a[href*="itch.io"]:not(".redeem-itch-game")')) {
-      const positionEle = window.location.hostname === 'shaigrorb.github.io' ? $(e).addClass('redeem-itch-game').parents('.item-card') : $(e).addClass('redeem-itch-game');
-      positionEle.after(`<a ${
-        window.location.hostname === 'freegames.codes' ? 'class="details__buy" ' : ''
+    const links = document.querySelectorAll(
+      'a[href*="itch.io"]:not(.redeem-itch-game)'
+    );
+
+    for (const originalLink of links) {
+      const itchUrl = normalizeItchUrl(
+        originalLink.getAttribute('href'),
+        window.location.href
+      );
+
+      originalLink.classList.add('redeem-itch-game');
+
+      if (!itchUrl) {
+        continue;
       }
-        data-itch-href="${$(e).attr('href')}"
-        href="javascript:void(0);"
-        onclick="redeemItchGame('${$(e).attr('href')}')"
-        target="_self"
-        style="${window.location.hostname === 'shaigrorb.github.io' ? 'position:relative;height:min-content;right:39px;background-color:#16a34a;top:4px;text-decoration-line:none;color:white;font-weight:bold;border-radius:2px;padding:5px;font-size:13px; ' : `margin-${window.location.hostname === 'freegames.codes' ? 'top' : 'left'}:10px !important;`}">Claim</a>`);
+
+      const claimLink = document.createElement('a');
+      claimLink.href = '#';
+      claimLink.textContent = 'Claim';
+      claimLink.classList.add('df-redeem-link');
+      claimLink.dataset.itchHref = itchUrl;
+      claimLink.target = '_self';
+
+      if (window.location.hostname === 'freegames.codes') {
+        claimLink.classList.add('details__buy');
+      }
+
+      if (window.location.hostname === 'shaigrorb.github.io') {
+        claimLink.style.cssText = [
+          'position:relative',
+          'height:min-content',
+          'right:39px',
+          'background-color:#16a34a',
+          'top:4px',
+          'text-decoration-line:none',
+          'color:white',
+          'font-weight:bold',
+          'border-radius:2px',
+          'padding:5px',
+          'font-size:13px'
+        ].join(';');
+      } else if (window.location.hostname === 'freegames.codes') {
+        claimLink.style.setProperty('margin-top', '10px', 'important');
+      } else {
+        claimLink.style.setProperty('margin-left', '10px', 'important');
+      }
+
+      claimLink.addEventListener('click', async (event) => {
+        event.preventDefault();
+        await redeemGame(itchUrl);
+      });
+
+      const positionElement =
+        window.location.hostname === 'shaigrorb.github.io'
+          ? originalLink.closest('.item-card')
+          : originalLink;
+
+      if (positionElement?.parentNode) {
+        positionElement.insertAdjacentElement('afterend', claimLink);
+      }
     }
   }
 
@@ -186,165 +515,320 @@
     window.close();
   }
 
-  function log(msg, type = 'info') {
-    if (typeof msg !== 'string') return console.log(msg);
+  function log(message, type = 'info') {
+    if (typeof message !== 'string') {
+      console.log('[Redeem itch.io]', message);
+      return;
+    }
 
-    Swal[$('.swal2-container').length > 0 ? 'update' : 'fire']({
-      title: type === 'success' ? 'Success!' : type === 'error' ? 'Error' : 'Notice',
-      html: msg,
-      icon: type,
+    const validTypes = ['success', 'error', 'warning', 'info'];
+    const normalizedType = validTypes.includes(type) ? type : 'info';
+
+    const titles = {
+      success: 'Success!',
+      error: 'Error',
+      warning: 'Warning',
+      info: 'Notice'
+    };
+
+    const alertOptions = {
+      title: titles[normalizedType],
+      html: message,
+      icon: normalizedType,
       showConfirmButton: true,
       customClass: {
         title: 'break-all'
       }
-    });
+    };
 
-    let color = 'color:';
-    switch (type) {
-      case 'success': color += 'green'; break;
-      case 'warning': color += 'blue'; break;
-      case 'info': color += 'yellow'; break;
-      case 'error': color += 'red'; break;
-      default: color += 'black';
+    if ($('.swal2-container').length > 0 && Swal.isVisible()) {
+      Swal.hideLoading();
+      Swal.update(alertOptions);
+    } else {
+      Swal.fire(alertOptions);
     }
-    console.log(`%c[Redeem itch.io] ${msg}`, color);
+
+    const colors = {
+      success: 'green',
+      warning: 'orange',
+      info: '#38bdf8',
+      error: 'red'
+    };
+
+    console.log(
+      `%c[Redeem itch.io] ${message.replace(/<br\s*\/?>/gi, ' ')}`,
+      `color:${colors[normalizedType]}`
+    );
   }
 
   async function processAllPageLinks() {
-    // Retardo asíncrono para obligar al navegador a repintar el DOM/SweetAlert antes de escanear
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => {
+      window.setTimeout(resolve, 50);
+    });
 
-    const rawLinks = $('a[href*="itch.io"]:not(".itch-io-game-link-owned"):not([href*="itch.io/b/"]):not([href*="itch.io/c/"])').toArray();
+    const rawLinks = $(
+      [
+        'a[href*="itch.io"]',
+        ':not(.itch-io-game-link-owned)',
+        ':not([href*="itch.io/b/"])',
+        ':not([href*="itch.io/c/"])'
+      ].join('')
+    ).toArray();
 
     if (rawLinks.length === 0) {
       log('No valid itch.io links found on this page.', 'warning');
       return;
     }
 
-    let gamesLink = [];
-    for (let i = 0; i < rawLinks.length; i++) {
-      log(`Scanning link ${i + 1} of ${rawLinks.length}...`);
-      const links = await getUrlLink(rawLinks[i]);
-      gamesLink = [...gamesLink, ...links];
+    let gameLinks = [];
+
+    for (let index = 0; index < rawLinks.length; index += 1) {
+      log(`Scanning link ${index + 1} of ${rawLinks.length}...`);
+
+      const extractedLinks = await getUrlLink(rawLinks[index]);
+      gameLinks.push(...extractedLinks);
     }
 
-    gamesLink = [...new Set(gamesLink)];
+    gameLinks = [...new Set(gameLinks)];
 
-    if (gamesLink.length === 0) {
+    if (gameLinks.length === 0) {
       log('No claimable games found in the extracted links.', 'warning');
       return;
     }
 
-    for (const e of gamesLink) {
-      await isOwn(e);
+    for (const gameLink of gameLinks) {
+      await isOwn(gameLink);
     }
 
     log('All games processed!', 'success');
   }
 
-  async function getUrlLink(e) {
-    let url = '';
-    if ($(e).attr('data-itch-href')) {
-      url = $(e).attr('data-itch-href');
-    } else {
-      if ($(e).hasClass('itch-io-game-link-owned')) return [];
-      url = $(e).attr('href');
-    }
-    log(`Processing game/bundle link: <br/>${url}`);
-    if (/https?:\/\/itch.io\/s\/[\d]+\/.+/.test(url)) {
-      log(`Fetching bundle information...<br/>${url}`);
-      const data = await httpRequest({ url, method: 'get' });
-
-      if (data.status === 200) {
-        if (data.responseText.includes('not_active_notification')) {
-          log('Promotion has ended!', 'error');
-          return [];
-        }
-        const gamesLink = [];
-        const games = $(data.responseText).find('.game_grid_widget.promo_game_grid a.thumb_link.game_link');
-        for (const g of games) {
-          gamesLink.push(g.href.replace(/\/$/, ''));
-        }
-        return gamesLink;
-      }
-      log('Request error!', 'error');
-      log(data);
+  async function getUrlLink(element) {
+    if ($(element).hasClass('itch-io-game-link-owned')) {
       return [];
-    } else if (/^https?:\/\/.+?\.itch\.io\/[^/]+?(\/purchase)?$/.test(url)) {
-      return [url.replace('/purchase', '').replace(/\/$/, '')];
     }
+
+    const rawUrl =
+      $(element).attr('data-itch-href') ||
+      $(element).attr('href');
+
+    const itchUrl = normalizeItchUrl(rawUrl, window.location.href);
+
+    if (!itchUrl) {
+      return [];
+    }
+
+    log(
+      `Processing game/bundle link:<br>${escapeHtml(itchUrl)}`
+    );
+
+    if (isItchBundleUrl(itchUrl)) {
+      log(
+        `Fetching bundle information...<br>${escapeHtml(itchUrl)}`
+      );
+
+      const data = await httpRequest({
+        url: itchUrl,
+        method: 'GET'
+      });
+
+      if (data.status !== 200) {
+        log('Request error!', 'error');
+        log(data);
+        return [];
+      }
+
+      if (String(data.responseText || '').includes('not_active_notification')) {
+        log('Promotion has ended!', 'error');
+        return [];
+      }
+
+      const extractedGameLinks = [];
+      const games = $(data.responseText).find(
+        '.game_grid_widget.promo_game_grid a.thumb_link.game_link'
+      );
+
+      for (const game of games) {
+        const gameUrl = normalizeItchUrl(
+          $(game).attr('href'),
+          data.finalUrl || itchUrl
+        );
+
+        if (gameUrl && isItchGameUrl(gameUrl)) {
+          extractedGameLinks.push(
+            getGameBaseUrl(gameUrl)
+          );
+        }
+      }
+
+      return extractedGameLinks.filter(Boolean);
+    }
+
+    if (isItchGameUrl(itchUrl)) {
+      const gameBaseUrl = getGameBaseUrl(itchUrl);
+      return gameBaseUrl ? [gameBaseUrl] : [];
+    }
+
     return [];
   }
 
-  async function redeemGame(e) {
-    let url = '';
-    if (typeof e === 'string') {
-      url = e;
-    } else if ($(e).attr('data-itch-href')) {
-      url = $(e).attr('data-itch-href');
-    } else {
-      if ($(e).hasClass('itch-io-game-link-owned')) return;
-      url = $(e).attr('href');
+  async function redeemGame(elementOrUrl) {
+    let rawUrl = '';
+
+    if (typeof elementOrUrl === 'string') {
+      rawUrl = elementOrUrl;
+    } else if (elementOrUrl) {
+      if ($(elementOrUrl).hasClass('itch-io-game-link-owned')) {
+        return;
+      }
+
+      rawUrl =
+        $(elementOrUrl).attr('data-itch-href') ||
+        $(elementOrUrl).attr('href') ||
+        '';
     }
-    log(`Current link: <br/>${url}`);
-    if (/https?:\/\/itch.io\/s\/[\d]+\/.+/.test(url)) {
-      log(`Fetching bundle information...<br/>${url}`);
-      const data = await httpRequest({ url, method: 'get' });
-      if (data.status === 200) {
-        if (data.responseText.includes('not_active_notification')) {
-          log('Promotion has ended!', 'error');
-        } else {
-          const games = $(data.responseText).find('.game_grid_widget.promo_game_grid a.thumb_link.game_link');
-          for (const g of games) {
-            await isOwn(g.href);
-          }
-          log('Finished processing bundle!', 'success');
-        }
-      } else {
+
+    const itchUrl = normalizeItchUrl(rawUrl, window.location.href);
+
+    if (!itchUrl) {
+      log('Invalid or unsupported itch.io URL.', 'error');
+      return;
+    }
+
+    log(`Current link:<br>${escapeHtml(itchUrl)}`);
+
+    if (isItchBundleUrl(itchUrl)) {
+      log(
+        `Fetching bundle information...<br>${escapeHtml(itchUrl)}`
+      );
+
+      const data = await httpRequest({
+        url: itchUrl,
+        method: 'GET'
+      });
+
+      if (data.status !== 200) {
         log('Request error!', 'error');
         log(data);
+        return;
       }
-    } else if (/^https?:\/\/.+?\.itch\.io\/[^/]+?(\/purchase)?$/.test(url)) {
-      await isOwn(url.replace('/purchase', ''));
-    } else if (/^https?:\/\/.+?\.itch\.io\/[^/]+?(\/purchase)\?reward_id=/.test(url)) {
-      await isOwn(url);
+
+      if (String(data.responseText || '').includes('not_active_notification')) {
+        log('Promotion has ended!', 'error');
+        return;
+      }
+
+      const games = $(data.responseText).find(
+        '.game_grid_widget.promo_game_grid a.thumb_link.game_link'
+      );
+
+      for (const game of games) {
+        const gameUrl = normalizeItchUrl(
+          $(game).attr('href'),
+          data.finalUrl || itchUrl
+        );
+
+        if (gameUrl) {
+          await isOwn(gameUrl);
+        }
+      }
+
+      log('Finished processing bundle!', 'success');
+      return;
     }
+
+    if (isItchGameUrl(itchUrl)) {
+      await isOwn(itchUrl);
+      return;
+    }
+
+    log('The supplied URL is not a supported game or bundle.', 'warning');
   }
 
   async function isOwn(url) {
-    log(`Game link: <br/>${url}`);
-    log(`Checking ownership...<br/>${url}`);
-    const data = await httpRequest({ url, method: 'get' });
-    if (data.status === 200) {
-      if (data.responseText.includes('purchase_banner_inner')) {
-        log('You already own this game!', 'success');
-      } else {
-        await purchase(url);
-      }
-    } else {
+    const itchUrl = normalizeItchUrl(url);
+
+    if (!itchUrl) {
+      log('Invalid itch.io game URL.', 'error');
+      return;
+    }
+
+    log(`Game link:<br>${escapeHtml(itchUrl)}`);
+    log(`Checking ownership...<br>${escapeHtml(itchUrl)}`);
+
+    const data = await httpRequest({
+      url: itchUrl,
+      method: 'GET'
+    });
+
+    if (data.status !== 200) {
       log('Request error!', 'error');
       log(data);
+      return;
     }
+
+    const responseText = String(data.responseText || '');
+
+    if (responseText.includes('purchase_banner_inner')) {
+      log('You already own this game!', 'success');
+      return;
+    }
+
+    await purchase(itchUrl);
   }
 
   async function purchase(url) {
     try {
-      log(`Loading checkout page...<br/>${url}`);
-      const purchaseUrl = url.includes('/purchase') ? url : `${url}/purchase`;
-      const data = await httpRequest({ url: purchaseUrl, method: 'get' });
-      if (data.status === 200) {
-        const html = $(data.responseText);
-        if (/0\.00/gim.test(html.find('.button_message:first .dollars[itemprop]').text()) || /0\.00/gim.test(html.find('.money_input').attr('placeholder')) || /自己出价|Name your own price|Pon tu propio precio/gim.test(html.find('.button_message:first .buy_message').text())) {
-          const csrf_token = html.find('[name="csrf_token"]').val();
-          const reward_id = html.find('[name="reward_id"]').val();
-          await download(purchaseUrl.replace(/\/purchase.*/, ''), csrf_token, reward_id);
-        } else {
-          log('Price is not $0.00, promotion may have ended!', 'error');
-        }
-      } else {
+      const purchaseUrl = getPurchaseUrl(url);
+
+      if (!purchaseUrl) {
+        log('Could not build the checkout URL.', 'error');
+        return;
+      }
+
+      log(
+        `Loading checkout page...<br>${escapeHtml(purchaseUrl)}`
+      );
+
+      const data = await httpRequest({
+        url: purchaseUrl,
+        method: 'GET'
+      });
+
+      if (data.status !== 200) {
         log('Request error!', 'error');
         log(data);
+        return;
       }
+
+      const html = $(data.responseText);
+
+      if (!isFreeCheckout(html)) {
+        log(
+          'Price is not $0.00, or the promotion may have ended!',
+          'error'
+        );
+        return;
+      }
+
+      const csrf_token = html.find('[name="csrf_token"]').first().val();
+      const reward_id = html.find('[name="reward_id"]').first().val();
+      const gameBaseUrl = getGameBaseUrl(purchaseUrl);
+
+      if (!csrf_token) {
+        log(
+          'The checkout page did not provide a CSRF token. You may need to log in again.',
+          'error'
+        );
+        return;
+      }
+
+      if (!gameBaseUrl) {
+        log('Could not determine the game URL.', 'error');
+        return;
+      }
+
+      await download(gameBaseUrl, csrf_token, reward_id);
     } catch (error) {
       log('Request error!', 'error');
       log(error);
@@ -352,171 +836,402 @@
   }
 
   async function download(url, csrf_token, reward_id) {
-    log(`Requesting download page...<br/>${url}`);
+    if (!csrf_token) {
+      log('Missing CSRF token.', 'error');
+      return;
+    }
+
+    log(
+      `Requesting download page...<br>${escapeHtml(url)}`
+    );
+
+    const formData = new URLSearchParams();
+    formData.set('csrf_token', csrf_token);
+
+    if (reward_id) {
+      formData.set('reward_id', reward_id);
+    }
+
     const data = await httpRequest({
-      url: `${url}/download_url`,
-      method: 'post',
+      url: `${url.replace(/\/+$/, '')}/download_url`,
+      method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
       },
-      data: `csrf_token=${encodeURIComponent(csrf_token)}${reward_id ? (`&reward_id=${reward_id}`) : ''}`,
+      data: formData.toString(),
       responseType: 'json'
     });
-    if (data.status === 200 && data.response && data.response.url) {
-      await loadDownload(data.response.url, url);
-    } else {
-      log('Request error!', 'error');
-      log(data);
+
+    let response = data.response;
+
+    if (
+      (!response || typeof response !== 'object') &&
+      data.responseText
+    ) {
+      try {
+        response = JSON.parse(data.responseText);
+      } catch (error) {
+        response = null;
+      }
     }
+
+    if (data.status === 200 && response?.url) {
+      await loadDownload(response.url, url);
+      return;
+    }
+
+    log('Request error!', 'error');
+    log(data);
   }
 
-  async function loadDownload(e, referer) {
+  async function loadDownload(downloadUrl, referer) {
+    let resolvedUrl;
+
+    try {
+      resolvedUrl = new URL(downloadUrl, referer).href;
+    } catch (error) {
+      log('Invalid download URL returned by itch.io.', 'error');
+      return;
+    }
+
     log('Loading download page...');
-    const urlObj = new URL(e);
+
     const data = await httpRequest({
-      url: urlObj.href,
-      method: 'get',
+      url: resolvedUrl,
+      method: 'GET',
       headers: {
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
-        'Accept-Encoding': 'gzip, deflate, br',
+        Accept:
+          'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.9',
-        DNT: 1,
-        Host: urlObj.hostname,
-        Referer: referer,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
+        Referer: referer
       }
     });
-    if (data.status === 200 && data.responseText) {
-      const html = $(data.responseText);
-      const claimBtn = html.find('button.button:contains("Link"),button.button:contains("Claim"),button.button:contains("链接"),button.button:contains("Vincular"),button.button:contains("Reclamar")');
-      const form = html.find('form[action*="claim-key"]');
-      if (/This page is linked|此页面已链接到帐户|Esta página está vinculada/gim.test(html.find('div.inner_column').text()) || html.find('a.button.download_btn[data-upload_id]').length > 0) {
-        log('Successfully claimed!', 'success');
-      } else if (form.length > 0) {
-        const actionUrl = form.attr('action');
-        const csrf_token = form.find('input[name="csrf_token"]').val();
-        await claimame(actionUrl, csrf_token, urlObj.href);
-      } else if (claimBtn.length > 0 && claimBtn.parents('form').length > 0) {
-        const actionForm = claimBtn.parents('form');
-        const actionUrl = actionForm.attr('action');
-        const csrf_token = actionForm.find('input[name="csrf_token"]').val();
-        await claimame(actionUrl, csrf_token, urlObj.href);
-      } else if (data.finalUrl.includes('/register')) {
-        log('Claim failed, please log in to itch.io first!', 'error');
-      } else {
-        log('Process completed with unknown result.', 'success');
-      }
-    } else {
+
+    const finalUrl = String(data.finalUrl || resolvedUrl);
+
+    if (/\/register(?:\/|\?|$)/i.test(finalUrl)) {
+      log('Claim failed. Please log in to itch.io first!', 'error');
+      return;
+    }
+
+    if (data.status !== 200 || !data.responseText) {
       log('Request error!', 'error');
       log(data);
+      return;
     }
-    if (typeof checkItchGame === 'function') checkItchGame();
+
+    const html = $(data.responseText);
+
+    const claimBtn = html.find(
+      [
+        'button.button:contains("Link")',
+        'button.button:contains("Claim")',
+        'button.button:contains("链接")',
+        'button.button:contains("Vincular")',
+        'button.button:contains("Reclamar")'
+      ].join(',')
+    );
+
+    const claimForm = html.find('form[action*="claim-key"]').first();
+
+    const alreadyLinked =
+      /This page is linked|此页面已链接到帐户|Esta página está vinculada/i.test(
+        html.find('div.inner_column').text()
+      );
+
+    const downloadAvailable =
+      html.find('a.button.download_btn[data-upload_id]').length > 0;
+
+    if (alreadyLinked || downloadAvailable) {
+      log('Successfully claimed!', 'success');
+    } else if (claimForm.length > 0) {
+      const actionUrl = claimForm.attr('action');
+      const csrf_token = claimForm
+        .find('input[name="csrf_token"]')
+        .first()
+        .val();
+
+      await claimGame(actionUrl, csrf_token, finalUrl);
+    } else if (
+      claimBtn.length > 0 &&
+      claimBtn.first().closest('form').length > 0
+    ) {
+      const actionForm = claimBtn.first().closest('form');
+      const actionUrl = actionForm.attr('action');
+      const csrf_token = actionForm
+        .find('input[name="csrf_token"]')
+        .first()
+        .val();
+
+      await claimGame(actionUrl, csrf_token, finalUrl);
+    } else {
+      log(
+        'The download page loaded, but no claim form or ownership confirmation was found.',
+        'warning'
+      );
+    }
+
+    if (typeof checkItchGame === 'function') {
+      checkItchGame();
+    }
   }
 
-  async function claimame(e, token, referer) {
+  async function claimGame(action, token, referer) {
+    if (!action) {
+      log('The claim form did not provide an action URL.', 'error');
+      return;
+    }
+
+    if (!token) {
+      log('The claim form did not provide a CSRF token.', 'error');
+      return;
+    }
+
+    let actionUrl;
+
+    try {
+      actionUrl = new URL(action, referer).href;
+    } catch (error) {
+      log('The claim form returned an invalid URL.', 'error');
+      return;
+    }
+
     log('Claiming game...');
-    const urlObj = new URL(e);
+
+    const formData = new URLSearchParams();
+    formData.set('csrf_token', token);
+
     const data = await httpRequest({
-      url: urlObj.href,
-      method: 'post',
+      url: actionUrl,
+      method: 'POST',
       headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Referer: referer,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        Referer: referer
       },
-      data: `csrf_token=${encodeURIComponent(token)}`
+      data: formData.toString()
     });
-    if (data.status === 200 && data.responseText) {
-      const html = $(data.responseText);
-      if (/This page is linked|此页面已链接到帐户|Esta página está vinculada/gim.test(html.find('div.inner_column').text()) || html.find('a.button.download_btn[data-upload_id]').length > 0) {
-        log('Successfully claimed!', 'success');
-      } else {
-        log('Process completed with unknown result.', 'success');
-      }
-    } else if (data.finalUrl.includes('/register')) {
-      log('Please log in first!', 'error');
-      log(data);
-    } else {
+
+    const finalUrl = String(data.finalUrl || actionUrl);
+
+    if (/\/register(?:\/|\?|$)/i.test(finalUrl)) {
+      log('Please log in to itch.io first!', 'error');
+      return;
+    }
+
+    if (data.status !== 200 || !data.responseText) {
       log('Request error!', 'error');
       log(data);
+      return;
+    }
+
+    const html = $(data.responseText);
+
+    const linked =
+      /This page is linked|此页面已链接到帐户|Esta página está vinculada/i.test(
+        html.find('div.inner_column').text()
+      );
+
+    const downloadAvailable =
+      html.find('a.button.download_btn[data-upload_id]').length > 0;
+
+    if (linked || downloadAvailable) {
+      log('Successfully claimed!', 'success');
+    } else {
+      log(
+        'The claim request completed, but ownership could not be confirmed.',
+        'warning'
+      );
     }
   }
 
-  function httpRequest(option, i = 0) {
+  function httpRequest(options, attempt = 0) {
+    const maxAttempts = 3;
+
     return new Promise((resolve, reject) => {
-      option.onload = (data) => resolve(data);
-      option.onerror = reject;
-      option.ontimeout = reject;
-      option.onabort = reject;
-      option.timeout = 30000;
-      GM_xmlhttpRequest(option);
-    }).then((data) => data)
-      .catch(() => {
-        if (i > 1) return {};
-        return httpRequest(option, ++i);
+      const requestOptions = {
+        ...options,
+        timeout: 30000,
+        onload: resolve,
+        onerror: reject,
+        ontimeout: reject,
+        onabort: reject
+      };
+
+      GM_xmlhttpRequest(requestOptions);
+    }).catch(async (error) => {
+      if (attempt + 1 >= maxAttempts) {
+        return {
+          status: 0,
+          response: null,
+          responseText: '',
+          finalUrl: options.url,
+          error
+        };
+      }
+
+      await new Promise((resolve) => {
+        window.setTimeout(resolve, 500 * (attempt + 1));
       });
+
+      return httpRequest(options, attempt + 1);
+    });
   }
 
-  // Banner flotante superior permanente con feedback visual e icono de carga instantáneo
   function createStartupBanner() {
-    if (document.getElementById('df-support-banner')) return;
+    if (
+      document.getElementById('df-support-banner') ||
+      sessionStorage.getItem('df_banner_closed') === 'true'
+    ) {
+      return;
+    }
 
     const banner = document.createElement('div');
     banner.id = 'df-support-banner';
+
     banner.innerHTML = `
-      <div style="font-weight: bold; margin-bottom: 6px; font-size: 13px; color: #ffffff;">🎮 Itch.io Auto-Redeem Active</div>
-      <div style="font-size: 11px; margin-bottom: 8px; color: #a1a1aa;">Created by Drowfear</div>
-      <button id="df-claim-all-btn" style="width: 100%; background: #fa4056; color: #fff; border: none; padding: 6px 10px; border-radius: 6px; font-size: 11px; font-weight: bold; cursor: pointer; margin-bottom: 8px; transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 6px;">
+      <div style="font-weight:bold;margin-bottom:6px;font-size:13px;color:#ffffff;">
+        🎮 Itch.io Auto-Redeem Active
+      </div>
+
+      <div style="font-size:11px;margin-bottom:8px;color:#a1a1aa;">
+        Created by Drowfear
+      </div>
+
+      <button
+        id="df-claim-all-btn"
+        type="button"
+        style="
+          width:100%;
+          background:#fa4056;
+          color:#fff;
+          border:none;
+          padding:6px 10px;
+          border-radius:6px;
+          font-size:11px;
+          font-weight:bold;
+          cursor:pointer;
+          margin-bottom:8px;
+          transition:all 0.2s;
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          gap:6px;
+        "
+      >
         <span id="df-btn-text">⚡ Claim All Links On Page</span>
       </button>
-      <div style="display: flex; gap: 6px; justify-content: center;">
-        <a href="https://buymeacoffee.com/drowfear" target="_blank" style="background: #FF813F; color: #fff; padding: 4px 8px; border-radius: 6px; text-decoration: none; font-size: 11px; font-weight: bold;">☕ Coffee</a>
-        <a href="https://ko-fi.com/drowfear" target="_blank" style="background: #FF5E5B; color: #fff; padding: 4px 8px; border-radius: 6px; text-decoration: none; font-size: 11px; font-weight: bold;">❤️ Ko-fi</a>
+
+      <div style="display:flex;gap:6px;justify-content:center;">
+        <a
+          href="https://buymeacoffee.com/drowfear"
+          target="_blank"
+          rel="noopener noreferrer"
+          style="
+            background:#FF813F;
+            color:#fff;
+            padding:4px 8px;
+            border-radius:6px;
+            text-decoration:none;
+            font-size:11px;
+            font-weight:bold;
+          "
+        >
+          ☕ Coffee
+        </a>
+
+        <a
+          href="https://ko-fi.com/drowfear"
+          target="_blank"
+          rel="noopener noreferrer"
+          style="
+            background:#FF5E5B;
+            color:#fff;
+            padding:4px 8px;
+            border-radius:6px;
+            text-decoration:none;
+            font-size:11px;
+            font-weight:bold;
+          "
+        >
+          ❤️ Ko-fi
+        </a>
       </div>
-      <button id="df-close-banner" style="position: absolute; top: 6px; right: 8px; background: none; border: none; color: #71717a; cursor: pointer; font-size: 14px; font-weight: bold;">✕</button>
+
+      <button
+        id="df-close-banner"
+        type="button"
+        aria-label="Close support banner"
+        title="Close"
+        style="
+          position:absolute;
+          top:6px;
+          right:8px;
+          background:none;
+          border:none;
+          color:#71717a;
+          cursor:pointer;
+          font-size:14px;
+          font-weight:bold;
+        "
+      >
+        ✕
+      </button>
     `;
 
-    document.body.appendChild(banner);
+    const appendBanner = () => {
+      if (!document.body || document.getElementById('df-support-banner')) {
+        return;
+      }
 
-    document.getElementById('df-close-banner').onclick = function () {
-      banner.remove();
-    };
+      document.body.appendChild(banner);
 
-    const claimBtn = document.getElementById('df-claim-all-btn');
-    const btnText = document.getElementById('df-btn-text');
+      const closeButton = banner.querySelector('#df-close-banner');
+      const claimButton = banner.querySelector('#df-claim-all-btn');
+      const buttonText = banner.querySelector('#df-btn-text');
 
-    claimBtn.onclick = async function () {
-      // 1. Deshabilitar el botón en el banner
-      claimBtn.disabled = true;
-      claimBtn.style.opacity = '0.7';
-      claimBtn.style.cursor = 'not-allowed';
-      btnText.innerHTML = '⏳ Processing...';
-
-      // 2. Feedback visual INSTANTÁNEO
-      Swal.fire({
-        title: 'Scanning Page...',
-        html: 'Searching for valid itch.io links and processing claims.',
-        icon: 'info',
-        allowOutsideClick: false,
-        showConfirmButton: false,
-        didOpen: () => {
-          Swal.showLoading();
-        }
+      closeButton.addEventListener('click', () => {
+        sessionStorage.setItem('df_banner_closed', 'true');
+        banner.remove();
       });
 
-      try {
-        await processAllPageLinks();
-      } catch (err) {
-        console.error(err);
-        log('An error occurred during extraction.', 'error');
-      } finally {
-        // 3. Restaurar estado original del botón
-        claimBtn.disabled = false;
-        claimBtn.style.opacity = '1';
-        claimBtn.style.cursor = 'pointer';
-        btnText.innerHTML = '⚡ Claim All Links On Page';
-      }
+      claimButton.addEventListener('click', async () => {
+        claimButton.disabled = true;
+        claimButton.style.opacity = '0.7';
+        claimButton.style.cursor = 'not-allowed';
+        buttonText.textContent = '⏳ Processing...';
+
+        Swal.fire({
+          title: 'Scanning Page...',
+          html: 'Searching for valid itch.io links and processing claims.',
+          icon: 'info',
+          allowOutsideClick: false,
+          showConfirmButton: false,
+          didOpen: () => {
+            Swal.showLoading();
+          }
+        });
+
+        try {
+          await processAllPageLinks();
+        } catch (error) {
+          console.error('[Redeem itch.io]', error);
+          log('An error occurred during extraction.', 'error');
+        } finally {
+          claimButton.disabled = false;
+          claimButton.style.opacity = '1';
+          claimButton.style.cursor = 'pointer';
+          buttonText.textContent = '⚡ Claim All Links On Page';
+        }
+      });
     };
+
+    if (document.body) {
+      appendBanner();
+    } else {
+      window.addEventListener('DOMContentLoaded', appendBanner, {
+        once: true
+      });
+    }
   }
 
   createStartupBanner();
