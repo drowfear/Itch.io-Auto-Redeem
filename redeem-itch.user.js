@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Redeem itch.io (English)
 // @namespace    Redeem-itch.io
-// @version      2.0.0 Final
-// @description  Automatically claim free game keys and claimable links on itch.io and external deal sites
+// @version      2.1.0
+// @description  Automatically claim free game keys on itch.io with a live progress panel and parallel claiming
 // @author       Drowfear (https://github.com/drowfear)
 // @iconURL      https://itch.io/favicon.ico
 // @include      *://*itch.io/*
@@ -36,8 +36,22 @@
 (function () {
   'use strict';
 
-  const closeWindow = true;
+  const CONFIG = {
+    closeWindow: true,
+    concurrency: 6,
+    requestTimeout: 20000,
+    maxAttempts: 2,
+    retryDelay: 300
+  };
+
   const currentUrl = window.location.href;
+
+  /* Cache de resultados por URL dentro de la misma pestaña */
+  const processedGames = new Map();
+
+  /* ------------------------------------------------------------------ */
+  /* Estilos                                                             */
+  /* ------------------------------------------------------------------ */
 
   GM_addStyle(`
     #df-support-banner {
@@ -45,6 +59,8 @@
       top: 20px !important;
       right: 20px !important;
       z-index: 999999 !important;
+      width: 300px !important;
+      box-sizing: border-box !important;
       background: #18181b !important;
       color: #f4f4f5 !important;
       padding: 14px 18px !important;
@@ -59,12 +75,168 @@
         Roboto,
         sans-serif !important;
       text-align: center !important;
-      min-width: 230px !important;
       border: 2px solid #fa4056 !important;
     }
 
     #df-support-banner a:hover {
       opacity: 0.85;
+    }
+
+    #df-progress-panel {
+      position: fixed !important;
+      top: 210px !important;
+      right: 20px !important;
+      z-index: 999998 !important;
+      width: 300px !important;
+      max-height: calc(100vh - 240px) !important;
+      box-sizing: border-box !important;
+      display: none;
+      flex-direction: column;
+      background: #18181b !important;
+      color: #f4f4f5 !important;
+      border-radius: 12px !important;
+      border: 1px solid #3f3f46 !important;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6) !important;
+      font-family:
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        Roboto,
+        sans-serif !important;
+      overflow: hidden;
+    }
+
+    #df-progress-panel.df-visible {
+      display: flex !important;
+    }
+
+    #df-progress-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      background: #27272a;
+      font-size: 12px;
+      font-weight: 700;
+      color: #ffffff;
+    }
+
+    #df-progress-header button {
+      background: none;
+      border: none;
+      color: #a1a1aa;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: bold;
+      padding: 0 3px;
+    }
+
+    #df-progress-header button:hover {
+      color: #ffffff;
+    }
+
+    #df-progress-bar-wrap {
+      height: 4px;
+      background: #3f3f46;
+      width: 100%;
+    }
+
+    #df-progress-bar {
+      height: 100%;
+      width: 0%;
+      background: #22c55e;
+      transition: width 0.2s ease;
+    }
+
+    #df-progress-stats {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 8px;
+      padding: 8px 12px;
+      font-size: 11px;
+      color: #d4d4d8;
+      border-bottom: 1px solid #27272a;
+    }
+
+    #df-progress-list {
+      list-style: none;
+      margin: 0;
+      padding: 4px 0;
+      overflow-y: auto;
+      flex: 1 1 auto;
+    }
+
+    #df-progress-list::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    #df-progress-list::-webkit-scrollbar-thumb {
+      background: #52525b;
+      border-radius: 4px;
+    }
+
+    .df-progress-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 7px;
+      padding: 6px 12px;
+      font-size: 11.5px;
+      line-height: 1.35;
+      border-bottom: 1px solid #212124;
+    }
+
+    .df-progress-item:last-child {
+      border-bottom: none;
+    }
+
+    .df-progress-icon {
+      flex: 0 0 auto;
+      width: 14px;
+      text-align: center;
+    }
+
+    .df-progress-body {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+
+    .df-progress-name {
+      display: block;
+      color: #f4f4f5;
+      text-decoration: none;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .df-progress-name:hover {
+      color: #38bdf8;
+      text-decoration: underline;
+    }
+
+    .df-progress-msg {
+      display: block;
+      font-size: 10.5px;
+      color: #a1a1aa;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .df-status-claimed .df-progress-name { color: #22c55e; }
+    .df-status-owned .df-progress-name { color: #38bdf8; }
+    .df-status-error .df-progress-name { color: #ef4444; }
+    .df-status-skipped .df-progress-name { color: #f59e0b; }
+
+    .df-spin {
+      display: inline-block;
+      animation: df-spin-anim 1s linear infinite;
+    }
+
+    @keyframes df-spin-anim {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
     }
 
     .swal2-popup {
@@ -108,46 +280,20 @@
       box-shadow: none !important;
     }
 
-    .swal2-icon.swal2-info {
-      border-color: #38bdf8 !important;
-      color: #38bdf8 !important;
-    }
-
-    .swal2-icon.swal2-success {
-      border-color: #22c55e !important;
-      color: #22c55e !important;
-    }
-
-    .swal2-icon.swal2-error {
-      border-color: #ef4444 !important;
-      color: #ef4444 !important;
-    }
-
-    .swal2-icon.swal2-warning {
-      border-color: #f59e0b !important;
-      color: #f59e0b !important;
-    }
+    .swal2-icon.swal2-info { border-color: #38bdf8 !important; color: #38bdf8 !important; }
+    .swal2-icon.swal2-success { border-color: #22c55e !important; color: #22c55e !important; }
+    .swal2-icon.swal2-error { border-color: #ef4444 !important; color: #ef4444 !important; }
+    .swal2-icon.swal2-warning { border-color: #f59e0b !important; color: #f59e0b !important; }
 
     .df-redeem-link {
       cursor: pointer;
     }
   `);
 
-  GM_registerMenuCommand('☕ Support My Work (Buy Me a Coffee)', () => {
-    GM_openInTab('https://buymeacoffee.com/drowfear', { active: true });
-  });
+  /* ------------------------------------------------------------------ */
+  /* Utilidades                                                          */
+  /* ------------------------------------------------------------------ */
 
-  GM_registerMenuCommand('❤️ Support My Work (Ko-fi)', () => {
-    GM_openInTab('https://ko-fi.com/drowfear', { active: true });
-  });
-
-  GM_registerMenuCommand('Extract All Itch Links', async () => {
-    await processAllPageLinks();
-  });
-
-  /**
-   * Escapa texto antes de introducirlo en el HTML de SweetAlert.
-   */
   function escapeHtml(value) {
     return String(value ?? '')
       .replace(/&/g, '&amp;')
@@ -157,24 +303,50 @@
       .replace(/'/g, '&#039;');
   }
 
-  /**
-   * Convierte y valida una URL de itch.io.
-   */
+  function consoleLog(message, type = 'info') {
+    const colors = {
+      success: 'green',
+      warning: 'orange',
+      info: '#38bdf8',
+      error: 'red'
+    };
+
+    console.log(
+      `%c[Redeem itch.io] ${String(message).replace(/<br\s*\/?>/gi, ' ')}`,
+      `color:${colors[type] || '#38bdf8'}`
+    );
+  }
+
+  function notify(message, type = 'info', title = null) {
+    const titles = {
+      success: 'Success!',
+      error: 'Error',
+      warning: 'Warning',
+      info: 'Notice'
+    };
+
+    consoleLog(message, type);
+
+    Swal.fire({
+      title: title || titles[type] || 'Notice',
+      html: message,
+      icon: type,
+      showConfirmButton: true,
+      customClass: { title: 'break-all' }
+    });
+  }
+
   function normalizeItchUrl(value, base = window.location.href) {
     if (!value) return null;
 
     try {
       const parsedUrl = new URL(String(value).trim(), base);
 
-      if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
-        return null;
-      }
+      if (!['http:', 'https:'].includes(parsedUrl.protocol)) return null;
 
       const hostname = parsedUrl.hostname.toLowerCase();
 
-      if (hostname !== 'itch.io' && !hostname.endsWith('.itch.io')) {
-        return null;
-      }
+      if (hostname !== 'itch.io' && !hostname.endsWith('.itch.io')) return null;
 
       parsedUrl.hash = '';
       return parsedUrl.href;
@@ -188,6 +360,7 @@
     if (!normalizedUrl) return false;
 
     const parsedUrl = new URL(normalizedUrl);
+
     return (
       ['itch.io', 'www.itch.io'].includes(parsedUrl.hostname.toLowerCase()) &&
       /^\/s\/\d+\/[^/]+\/?$/i.test(parsedUrl.pathname)
@@ -201,9 +374,7 @@
     const parsedUrl = new URL(normalizedUrl);
     const hostname = parsedUrl.hostname.toLowerCase();
 
-    if (hostname === 'itch.io' || hostname === 'www.itch.io') {
-      return false;
-    }
+    if (hostname === 'itch.io' || hostname === 'www.itch.io') return false;
 
     return /^\/[^/]+(?:\/purchase)?\/?$/i.test(parsedUrl.pathname);
   }
@@ -213,10 +384,9 @@
     if (!normalizedUrl) return false;
 
     const parsedUrl = new URL(normalizedUrl);
-    const hostname = parsedUrl.hostname.toLowerCase();
 
     return (
-      hostname.endsWith('.itch.io') &&
+      parsedUrl.hostname.toLowerCase().endsWith('.itch.io') &&
       /^\/[^/]+\/download\/.*$/i.test(parsedUrl.pathname)
     );
   }
@@ -226,6 +396,7 @@
     if (!normalizedUrl) return null;
 
     const parsedUrl = new URL(normalizedUrl);
+
     parsedUrl.pathname = parsedUrl.pathname
       .replace(/\/purchase\/?$/i, '')
       .replace(/\/+$/, '');
@@ -242,15 +413,29 @@
 
     const parsedUrl = new URL(normalizedUrl);
 
-    if (/\/purchase\/?$/i.test(parsedUrl.pathname)) {
-      return parsedUrl.href;
-    }
+    if (/\/purchase\/?$/i.test(parsedUrl.pathname)) return parsedUrl.href;
 
     parsedUrl.pathname = `${parsedUrl.pathname.replace(/\/+$/, '')}/purchase`;
     parsedUrl.search = '';
     parsedUrl.hash = '';
 
     return parsedUrl.href;
+  }
+
+  function getGameTitle(url) {
+    try {
+      const parsedUrl = new URL(url);
+      const slug = parsedUrl.pathname
+        .replace(/\/purchase\/?$/i, '')
+        .replace(/^\/+|\/+$/g, '');
+
+      const author = parsedUrl.hostname.replace(/\.itch\.io$/i, '');
+      const name = (slug || author).replace(/[-_]/g, ' ');
+
+      return `${name} · ${author}`;
+    } catch (error) {
+      return url;
+    }
   }
 
   function isFreeCheckout(html) {
@@ -275,34 +460,677 @@
     );
   }
 
-  /**
-   * Automatic download-link claiming.
-   */
-  if (isItchDownloadUrl(currentUrl)) {
-    $('button.button').each((index, element) => {
-      const buttonText = $(element).text();
+  function isLinkedPage(html) {
+    const linkedText =
+      /This page is linked|此页面已链接到帐户|Esta página está vinculada/i.test(
+        html.find('div.inner_column').text()
+      );
 
-      if (/link|claim|链接|vincular|reclamar/i.test(buttonText)) {
-        element.click();
+    const downloadAvailable =
+      html.find('a.button.download_btn[data-upload_id]').length > 0;
+
+    return linkedText || downloadAvailable;
+  }
+
+  function delay(ms) {
+    return new Promise((resolve) => {
+      window.setTimeout(resolve, ms);
+    });
+  }
+
+  /* Ejecuta tareas en paralelo con límite de concurrencia */
+  async function runPool(items, limit, worker) {
+    const queue = [...items];
+    const size = Math.max(1, Math.min(limit, queue.length || 1));
+
+    const runners = Array.from({ length: size }, async () => {
+      while (queue.length > 0) {
+        const item = queue.shift();
+        await worker(item);
       }
     });
 
-    const pageIsLinked =
-      /This page is linked|此页面已链接到帐户|Esta página está vinculada/i.test(
-        $('div.inner_column').text()
+    await Promise.all(runners);
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Panel de progreso (lado derecho)                                    */
+  /* ------------------------------------------------------------------ */
+
+  const ProgressPanel = (() => {
+    const STATUS_META = {
+      pending: { icon: '•', label: 'Queued' },
+      working: { icon: '<span class="df-spin">◠</span>', label: 'Working' },
+      claimed: { icon: '✅', label: 'Claimed' },
+      owned: { icon: '📦', label: 'Already owned' },
+      skipped: { icon: '⚠️', label: 'Skipped' },
+      error: { icon: '❌', label: 'Failed' }
+    };
+
+    let panel = null;
+    let list = null;
+    let stats = null;
+    let bar = null;
+    let counters = null;
+
+    function resetCounters() {
+      counters = {
+        total: 0,
+        claimed: 0,
+        owned: 0,
+        skipped: 0,
+        error: 0,
+        done: 0
+      };
+    }
+
+    resetCounters();
+
+    function build() {
+      if (panel && document.body.contains(panel)) return;
+
+      panel = document.createElement('div');
+      panel.id = 'df-progress-panel';
+
+      panel.innerHTML = `
+        <div id="df-progress-header">
+          <span id="df-progress-title">Claim progress</span>
+          <span>
+            <button type="button" id="df-progress-clear" title="Clear list">🧹</button>
+            <button type="button" id="df-progress-hide" title="Hide panel">✕</button>
+          </span>
+        </div>
+        <div id="df-progress-bar-wrap"><div id="df-progress-bar"></div></div>
+        <div id="df-progress-stats"></div>
+        <ul id="df-progress-list"></ul>
+      `;
+
+      document.body.appendChild(panel);
+
+      list = panel.querySelector('#df-progress-list');
+      stats = panel.querySelector('#df-progress-stats');
+      bar = panel.querySelector('#df-progress-bar');
+
+      panel.querySelector('#df-progress-hide').addEventListener('click', () => {
+        panel.classList.remove('df-visible');
+      });
+
+      panel.querySelector('#df-progress-clear').addEventListener('click', () => {
+        clear();
+      });
+
+      renderStats();
+    }
+
+    function show() {
+      build();
+      panel.classList.add('df-visible');
+    }
+
+    function clear() {
+      build();
+      list.innerHTML = '';
+      resetCounters();
+      renderStats();
+    }
+
+    function renderStats() {
+      if (!stats) return;
+
+      stats.innerHTML = `
+        <span>Total: <b>${counters.total}</b></span>
+        <span style="color:#22c55e;">✅ ${counters.claimed}</span>
+        <span style="color:#38bdf8;">📦 ${counters.owned}</span>
+        <span style="color:#f59e0b;">⚠️ ${counters.skipped}</span>
+        <span style="color:#ef4444;">❌ ${counters.error}</span>
+      `;
+
+      const percent = counters.total
+        ? Math.round((counters.done / counters.total) * 100)
+        : 0;
+
+      bar.style.width = `${percent}%`;
+    }
+
+    function setHeader(text) {
+      build();
+      const title = panel.querySelector('#df-progress-title');
+      if (title) title.textContent = text;
+    }
+
+    function addItem(url, initialStatus = 'pending', message = 'Queued') {
+      show();
+
+      const item = document.createElement('li');
+      item.className = `df-progress-item df-status-${initialStatus}`;
+
+      item.innerHTML = `
+        <span class="df-progress-icon">${STATUS_META[initialStatus].icon}</span>
+        <span class="df-progress-body">
+          <a class="df-progress-name" target="_blank" rel="noopener noreferrer"></a>
+          <span class="df-progress-msg"></span>
+        </span>
+      `;
+
+      const link = item.querySelector('.df-progress-name');
+      link.href = url;
+      link.textContent = getGameTitle(url);
+      link.title = url;
+
+      item.querySelector('.df-progress-msg').textContent = message;
+
+      list.appendChild(item);
+
+      counters.total += 1;
+      renderStats();
+
+      let finished = false;
+
+      return {
+        url,
+        setStatus(status, msg) {
+          const meta = STATUS_META[status] || STATUS_META.pending;
+
+          item.className = `df-progress-item df-status-${status}`;
+          item.querySelector('.df-progress-icon').innerHTML = meta.icon;
+          item.querySelector('.df-progress-msg').textContent = msg || meta.label;
+
+          if (!finished && ['claimed', 'owned', 'skipped', 'error'].includes(status)) {
+            finished = true;
+            counters.done += 1;
+
+            if (counters[status] !== undefined) counters[status] += 1;
+          }
+
+          renderStats();
+        }
+      };
+    }
+
+    return { show, clear, addItem, setHeader, build, get counters() { return counters; } };
+  })();
+
+  /* ------------------------------------------------------------------ */
+  /* Peticiones HTTP                                                     */
+  /* ------------------------------------------------------------------ */
+
+  function httpRequest(options, attempt = 0) {
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        ...options,
+        timeout: CONFIG.requestTimeout,
+        onload: resolve,
+        onerror: reject,
+        ontimeout: reject,
+        onabort: reject
+      });
+    }).catch(async (error) => {
+      if (attempt + 1 >= CONFIG.maxAttempts) {
+        return {
+          status: 0,
+          response: null,
+          responseText: '',
+          finalUrl: options.url,
+          error
+        };
+      }
+
+      await delay(CONFIG.retryDelay * (attempt + 1));
+      return httpRequest(options, attempt + 1);
+    });
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Lógica de reclamación                                               */
+  /* ------------------------------------------------------------------ */
+
+  async function submitClaimForm(action, token, referer) {
+    if (!action) return { status: 'skipped', message: 'Claim form without action URL' };
+    if (!token) return { status: 'skipped', message: 'Claim form without CSRF token' };
+
+    let actionUrl;
+
+    try {
+      actionUrl = new URL(action, referer).href;
+    } catch (error) {
+      return { status: 'error', message: 'Invalid claim form URL' };
+    }
+
+    const formData = new URLSearchParams();
+    formData.set('csrf_token', token);
+
+    const data = await httpRequest({
+      url: actionUrl,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        Referer: referer
+      },
+      data: formData.toString()
+    });
+
+    const finalUrl = String(data.finalUrl || actionUrl);
+
+    if (/\/register(?:\/|\?|$)/i.test(finalUrl)) {
+      return { status: 'error', message: 'Not logged in to itch.io' };
+    }
+
+    if (data.status !== 200 || !data.responseText) {
+      return { status: 'error', message: `Claim request failed (${data.status})` };
+    }
+
+    if (isLinkedPage($(data.responseText))) {
+      return { status: 'claimed', message: 'Key linked to your account' };
+    }
+
+    return { status: 'skipped', message: 'Claim sent, ownership not confirmed' };
+  }
+
+  async function openDownloadPage(downloadUrl, referer) {
+    let resolvedUrl;
+
+    try {
+      resolvedUrl = new URL(downloadUrl, referer).href;
+    } catch (error) {
+      return { status: 'error', message: 'Invalid download URL' };
+    }
+
+    const data = await httpRequest({
+      url: resolvedUrl,
+      method: 'GET',
+      headers: {
+        Accept:
+          'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        Referer: referer
+      }
+    });
+
+    const finalUrl = String(data.finalUrl || resolvedUrl);
+
+    if (/\/register(?:\/|\?|$)/i.test(finalUrl)) {
+      return { status: 'error', message: 'Not logged in to itch.io' };
+    }
+
+    if (data.status !== 200 || !data.responseText) {
+      return { status: 'error', message: `Download page failed (${data.status})` };
+    }
+
+    const html = $(data.responseText);
+
+    if (isLinkedPage(html)) {
+      return { status: 'claimed', message: 'Added to your library' };
+    }
+
+    const claimForm = html.find('form[action*="claim-key"]').first();
+
+    if (claimForm.length > 0) {
+      return submitClaimForm(
+        claimForm.attr('action'),
+        claimForm.find('input[name="csrf_token"]').first().val(),
+        finalUrl
       );
+    }
 
-    const downloadIsAvailable =
-      $('a.button.download_btn[data-upload_id]').length > 0;
+    const claimBtn = html
+      .find(
+        [
+          'button.button:contains("Link")',
+          'button.button:contains("Claim")',
+          'button.button:contains("链接")',
+          'button.button:contains("Vincular")',
+          'button.button:contains("Reclamar")'
+        ].join(',')
+      )
+      .first();
 
-    if ((pageIsLinked || downloadIsAvailable) && closeWindow) {
-      closePage();
+    const btnForm = claimBtn.closest('form');
+
+    if (claimBtn.length > 0 && btnForm.length > 0) {
+      return submitClaimForm(
+        btnForm.attr('action'),
+        btnForm.find('input[name="csrf_token"]').first().val(),
+        finalUrl
+      );
+    }
+
+    return { status: 'skipped', message: 'No claim form found on download page' };
+  }
+
+  async function requestDownloadUrl(gameBaseUrl, csrf_token, reward_id) {
+    const formData = new URLSearchParams();
+    formData.set('csrf_token', csrf_token);
+
+    if (reward_id) formData.set('reward_id', reward_id);
+
+    const data = await httpRequest({
+      url: `${gameBaseUrl.replace(/\/+$/, '')}/download_url`,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
+      },
+      data: formData.toString(),
+      responseType: 'json'
+    });
+
+    let response = data.response;
+
+    if ((!response || typeof response !== 'object') && data.responseText) {
+      try {
+        response = JSON.parse(data.responseText);
+      } catch (error) {
+        response = null;
+      }
+    }
+
+    if (data.status === 200 && response?.url) {
+      return openDownloadPage(response.url, gameBaseUrl);
+    }
+
+    return {
+      status: 'error',
+      message: response?.errors?.[0] || `download_url failed (${data.status})`
+    };
+  }
+
+  /**
+   * Procesa un único juego y devuelve { status, message }.
+   */
+  async function claimSingleGame(rawUrl, entry = null) {
+    const gameUrl = normalizeItchUrl(rawUrl);
+
+    if (!gameUrl) {
+      entry?.setStatus('error', 'Invalid itch.io URL');
+      return { status: 'error', message: 'Invalid itch.io URL' };
+    }
+
+    const cacheKey = getGameBaseUrl(gameUrl);
+
+    if (processedGames.has(cacheKey)) {
+      const cached = processedGames.get(cacheKey);
+      entry?.setStatus(cached.status, `${cached.message} (cached)`);
+      return cached;
+    }
+
+    const report = (result) => {
+      processedGames.set(cacheKey, result);
+      entry?.setStatus(result.status, result.message);
+      consoleLog(`${cacheKey} → ${result.status}: ${result.message}`, result.status === 'error' ? 'error' : 'info');
+      return result;
+    };
+
+    try {
+      entry?.setStatus('working', 'Checking ownership…');
+
+      const ownershipData = await httpRequest({ url: cacheKey, method: 'GET' });
+
+      if (ownershipData.status !== 200) {
+        return report({
+          status: 'error',
+          message: `Game page failed (${ownershipData.status})`
+        });
+      }
+
+      if (String(ownershipData.responseText || '').includes('purchase_banner_inner')) {
+        return report({ status: 'owned', message: 'Already in your library' });
+      }
+
+      entry?.setStatus('working', 'Opening checkout…');
+
+      const purchaseUrl = getPurchaseUrl(cacheKey);
+      const purchaseData = await httpRequest({ url: purchaseUrl, method: 'GET' });
+
+      if (purchaseData.status !== 200) {
+        return report({
+          status: 'error',
+          message: `Checkout failed (${purchaseData.status})`
+        });
+      }
+
+      const html = $(purchaseData.responseText);
+
+      if (!isFreeCheckout(html)) {
+        return report({ status: 'skipped', message: 'Not free anymore' });
+      }
+
+      const csrf_token = html.find('[name="csrf_token"]').first().val();
+      const reward_id = html.find('[name="reward_id"]').first().val();
+
+      if (!csrf_token) {
+        return report({ status: 'error', message: 'No CSRF token (log in again)' });
+      }
+
+      entry?.setStatus('working', 'Claiming…');
+
+      const result = await requestDownloadUrl(cacheKey, csrf_token, reward_id);
+      return report(result);
+    } catch (error) {
+      console.error('[Redeem itch.io]', error);
+      return report({ status: 'error', message: String(error?.message || error) });
     }
   }
 
   /**
-   * Claim free itch.io games.
+   * Extrae los juegos de un bundle.
    */
+  async function expandBundle(bundleUrl) {
+    const data = await httpRequest({ url: bundleUrl, method: 'GET' });
+
+    if (data.status !== 200) return [];
+
+    if (String(data.responseText || '').includes('not_active_notification')) {
+      consoleLog(`Promotion ended: ${bundleUrl}`, 'warning');
+      return [];
+    }
+
+    const games = $(data.responseText).find(
+      '.game_grid_widget.promo_game_grid a.thumb_link.game_link'
+    );
+
+    const result = [];
+
+    games.each((index, game) => {
+      const gameUrl = normalizeItchUrl(
+        $(game).attr('href'),
+        data.finalUrl || bundleUrl
+      );
+
+      if (gameUrl && isItchGameUrl(gameUrl)) {
+        result.push(getGameBaseUrl(gameUrl));
+      }
+    });
+
+    return result.filter(Boolean);
+  }
+
+  /**
+   * Reclama una lista de URLs en paralelo mostrándolo en el panel.
+   */
+  async function claimUrls(urls, headerText = 'Claim progress') {
+    const unique = [...new Set(urls.filter(Boolean))];
+
+    if (unique.length === 0) {
+      notify('No claimable games found.', 'warning');
+      return;
+    }
+
+    ProgressPanel.show();
+    ProgressPanel.setHeader(`${headerText} (${unique.length})`);
+
+    const before = { ...ProgressPanel.counters };
+    const entries = unique.map((url) => ({ url, entry: ProgressPanel.addItem(url) }));
+
+    await runPool(entries, CONFIG.concurrency, async ({ url, entry }) => {
+      await claimSingleGame(url, entry);
+    });
+
+    const after = ProgressPanel.counters;
+
+    notify(
+      `
+        <div style="text-align:left;font-size:0.9rem;line-height:1.6;">
+          ✅ Claimed: <b>${after.claimed - before.claimed}</b><br>
+          📦 Already owned: <b>${after.owned - before.owned}</b><br>
+          ⚠️ Skipped: <b>${after.skipped - before.skipped}</b><br>
+          ❌ Failed: <b>${after.error - before.error}</b>
+        </div>
+      `,
+      (after.error - before.error) > 0 ? 'warning' : 'success',
+      'Finished'
+    );
+
+    if (typeof checkItchGame === 'function') checkItchGame();
+  }
+
+  /**
+   * Recolecta todos los enlaces itch.io de la página (juegos + bundles).
+   */
+  async function collectPageGameUrls() {
+    const rawLinks = Array.from(
+      document.querySelectorAll(
+        'a[href*="itch.io"]:not(.itch-io-game-link-owned):not([href*="itch.io/b/"]):not([href*="itch.io/c/"])'
+      )
+    );
+
+    const gameUrls = new Set();
+    const bundleUrls = new Set();
+
+    for (const link of rawLinks) {
+      const url = normalizeItchUrl(
+        link.dataset.itchHref || link.getAttribute('href'),
+        window.location.href
+      );
+
+      if (!url) continue;
+
+      if (isItchBundleUrl(url)) {
+        bundleUrls.add(url);
+      } else if (isItchGameUrl(url)) {
+        gameUrls.add(getGameBaseUrl(url));
+      }
+    }
+
+    if (bundleUrls.size > 0) {
+      const expanded = await Promise.all([...bundleUrls].map(expandBundle));
+      expanded.flat().forEach((url) => gameUrls.add(url));
+    }
+
+    return [...gameUrls];
+  }
+
+  async function processAllPageLinks() {
+    ProgressPanel.show();
+    ProgressPanel.setHeader('Scanning page…');
+
+    const urls = await collectPageGameUrls();
+
+    if (urls.length === 0) {
+      ProgressPanel.setHeader('Claim progress');
+      notify('No valid itch.io game links found on this page.', 'warning');
+      return;
+    }
+
+    await claimUrls(urls, 'Claim progress');
+  }
+
+  /**
+   * Punto de entrada público (elemento, URL o bundle).
+   */
+  async function redeemGame(elementOrUrl) {
+    let rawUrl = '';
+
+    if (typeof elementOrUrl === 'string') {
+      rawUrl = elementOrUrl;
+    } else if (elementOrUrl) {
+      if ($(elementOrUrl).hasClass('itch-io-game-link-owned')) return;
+
+      rawUrl =
+        $(elementOrUrl).attr('data-itch-href') ||
+        $(elementOrUrl).attr('href') ||
+        '';
+    }
+
+    const itchUrl = normalizeItchUrl(rawUrl, window.location.href);
+
+    if (!itchUrl) {
+      notify('Invalid or unsupported itch.io URL.', 'error');
+      return;
+    }
+
+    if (isItchBundleUrl(itchUrl)) {
+      ProgressPanel.show();
+      ProgressPanel.setHeader('Reading bundle…');
+
+      const urls = await expandBundle(itchUrl);
+
+      if (urls.length === 0) {
+        ProgressPanel.setHeader('Claim progress');
+        notify('No games found in this bundle (or the promotion ended).', 'warning');
+        return;
+      }
+
+      await claimUrls(urls, 'Bundle claim');
+      return;
+    }
+
+    if (isItchGameUrl(itchUrl)) {
+      ProgressPanel.show();
+      ProgressPanel.setHeader('Claim progress');
+
+      const entry = ProgressPanel.addItem(getGameBaseUrl(itchUrl));
+      const result = await claimSingleGame(itchUrl, entry);
+
+      if (result.status === 'error') {
+        notify(escapeHtml(result.message), 'error');
+      }
+
+      if (typeof checkItchGame === 'function') checkItchGame();
+      return;
+    }
+
+    notify('The supplied URL is not a supported game or bundle.', 'warning');
+  }
+
+  unsafeWindow.redeemItchGame = redeemGame;
+
+  /* ------------------------------------------------------------------ */
+  /* Menú de Tampermonkey                                                */
+  /* ------------------------------------------------------------------ */
+
+  GM_registerMenuCommand('☕ Support My Work (Buy Me a Coffee)', () => {
+    GM_openInTab('https://buymeacoffee.com/drowfear', { active: true });
+  });
+
+  GM_registerMenuCommand('❤️ Support My Work (Ko-fi)', () => {
+    GM_openInTab('https://ko-fi.com/drowfear', { active: true });
+  });
+
+  GM_registerMenuCommand('⚡ Claim all itch.io links on page', async () => {
+    await processAllPageLinks();
+  });
+
+  /* ------------------------------------------------------------------ */
+  /* Comportamiento por página                                           */
+  /* ------------------------------------------------------------------ */
+
+  function closePage() {
+    window.close();
+  }
+
+  /* Página de descarga: enlazar clave automáticamente */
+  if (isItchDownloadUrl(currentUrl)) {
+    $('button.button').each((index, element) => {
+      if (/link|claim|链接|vincular|reclamar/i.test($(element).text())) {
+        element.click();
+      }
+    });
+
+    if (isLinkedPage($(document)) && CONFIG.closeWindow) {
+      closePage();
+    }
+  }
+
+  /* Página de compra / juego */
   const currentNormalizedUrl = normalizeItchUrl(currentUrl);
 
   if (
@@ -312,27 +1140,16 @@
       $('a.direct_download_btn').text()
     )
   ) {
-    const directDownloadButton = $('a.direct_download_btn').get(0);
-
-    if (directDownloadButton) {
-      directDownloadButton.click();
-    }
+    $('a.direct_download_btn').get(0)?.click();
   } else if (
     isItchGameUrl(currentUrl) &&
     $('.purchase_banner_inner').length === 0 &&
     isFreeCheckout($(document))
   ) {
     const buyButton = $('.buy_btn').first();
-    const purchaseHref = normalizeItchUrl(
-      buyButton.attr('href'),
-      window.location.href
-    );
+    const purchaseHref = normalizeItchUrl(buyButton.attr('href'), window.location.href);
 
-    if (
-      buyButton.length > 0 &&
-      purchaseHref &&
-      $('.df-background-claim-button').length === 0
-    ) {
+    if (buyButton.length > 0 && purchaseHref && $('.df-background-claim-button').length === 0) {
       const backgroundClaimButton = $('<a>', {
         href: '#',
         class: 'button df-background-claim-button df-redeem-link',
@@ -352,76 +1169,49 @@
     }
   }
 
-  /**
-   * Temporary bundles.
-   */
-  if (isItchBundleUrl(currentUrl)) {
-    if ($('#redeem-itch-io').length === 0) {
-      const bundleButton = $(
-        '<button>',
-        {
-          id: 'redeem-itch-io',
-          class: 'button',
-          type: 'button',
-          text: 'Claim in Background'
-        }
+  /* Bundles temporales */
+  if (isItchBundleUrl(currentUrl) && $('#redeem-itch-io').length === 0) {
+    const bundleButton = $('<button>', {
+      id: 'redeem-itch-io',
+      class: 'button',
+      type: 'button',
+      text: 'Claim in Background'
+    });
+
+    if ($('.promotion_buy_row .buy_game_btn').length > 0) {
+      bundleButton.attr(
+        'style',
+        'font-size:18px;letter-spacing:0.025em;line-height:36px;height:40px;padding:0 20px;margin:0 16px'
       );
 
-      if ($('.promotion_buy_row .buy_game_btn').length > 0) {
-        bundleButton.attr(
-          'style',
-          [
-            'font-size:18px',
-            'letter-spacing:0.025em',
-            'line-height:36px',
-            'height:40px',
-            'padding:0 20px',
-            'margin:0 16px'
-          ].join(';')
-        );
+      $('.promotion_buy_row .buy_game_btn').after(bundleButton);
+    } else {
+      bundleButton.attr(
+        'style',
+        'font-size:18px;letter-spacing:0.025em;line-height:36px;padding:0 20px;margin:10px 30%;width:40%'
+      );
 
-        $('.promotion_buy_row .buy_game_btn').after(bundleButton);
-      } else {
-        bundleButton.attr(
-          'style',
-          [
-            'font-size:18px',
-            'letter-spacing:0.025em',
-            'line-height:36px',
-            'padding:0 20px',
-            'margin:10px 30%',
-            'width:40%'
-          ].join(';')
-        );
-
-        const buttonContainer = $('<div>', {
-          style: 'width:100%;'
-        }).append(bundleButton);
-
-        $('.countdown_row').prepend(buttonContainer);
-      }
-
-      bundleButton.on('click', async () => {
-        const gameLinks = $('.thumb_link.game_link').toArray();
-
-        bundleButton.prop('disabled', true);
-
-        try {
-          for (const gameLink of gameLinks) {
-            await redeemGame(gameLink);
-          }
-
-          log('Bundle processing completed!', 'success');
-        } finally {
-          bundleButton.prop('disabled', false);
-        }
-      });
+      $('.countdown_row').prepend($('<div>', { style: 'width:100%;' }).append(bundleButton));
     }
+
+    bundleButton.on('click', async () => {
+      bundleButton.prop('disabled', true);
+
+      try {
+        const urls = $('.thumb_link.game_link')
+          .toArray()
+          .map((element) => normalizeItchUrl($(element).attr('href'), window.location.href))
+          .filter((url) => url && isItchGameUrl(url))
+          .map(getGameBaseUrl);
+
+        await claimUrls(urls, 'Bundle claim');
+      } finally {
+        bundleButton.prop('disabled', false);
+      }
+    });
   }
 
-  /**
-   * Claim links from external sites.
-   */
+  /* Sitios externos */
   const supportedExternalHosts = [
     'keylol.com',
     'www.steamgifts.com',
@@ -432,35 +1222,15 @@
     'shaigrorb.github.io'
   ];
 
-  if (supportedExternalHosts.includes(window.location.hostname)) {
-    addRedeemBtn();
-
-    const observer = new MutationObserver(() => {
-      addRedeemBtn();
-    });
-
-    observer.observe(document.documentElement, {
-      childList: true,
-      subtree: true
-    });
-  }
-
   function addRedeemBtn() {
-    const links = document.querySelectorAll(
-      'a[href*="itch.io"]:not(.redeem-itch-game)'
-    );
+    const links = document.querySelectorAll('a[href*="itch.io"]:not(.redeem-itch-game)');
 
     for (const originalLink of links) {
-      const itchUrl = normalizeItchUrl(
-        originalLink.getAttribute('href'),
-        window.location.href
-      );
+      const itchUrl = normalizeItchUrl(originalLink.getAttribute('href'), window.location.href);
 
       originalLink.classList.add('redeem-itch-game');
 
-      if (!itchUrl) {
-        continue;
-      }
+      if (!itchUrl) continue;
 
       const claimLink = document.createElement('a');
       claimLink.href = '#';
@@ -471,9 +1241,8 @@
 
       if (window.location.hostname === 'freegames.codes') {
         claimLink.classList.add('details__buy');
-      }
-
-      if (window.location.hostname === 'shaigrorb.github.io') {
+        claimLink.style.setProperty('margin-top', '10px', 'important');
+      } else if (window.location.hostname === 'shaigrorb.github.io') {
         claimLink.style.cssText = [
           'position:relative',
           'height:min-content',
@@ -487,8 +1256,6 @@
           'padding:5px',
           'font-size:13px'
         ].join(';');
-      } else if (window.location.hostname === 'freegames.codes') {
-        claimLink.style.setProperty('margin-top', '10px', 'important');
       } else {
         claimLink.style.setProperty('margin-left', '10px', 'important');
       }
@@ -509,573 +1276,28 @@
     }
   }
 
-  unsafeWindow.redeemItchGame = redeemGame;
+  if (supportedExternalHosts.includes(window.location.hostname)) {
+    addRedeemBtn();
 
-  function closePage() {
-    window.close();
-  }
+    let scheduled = false;
 
-  function log(message, type = 'info') {
-    if (typeof message !== 'string') {
-      console.log('[Redeem itch.io]', message);
-      return;
-    }
+    const observer = new MutationObserver(() => {
+      if (scheduled) return;
 
-    const validTypes = ['success', 'error', 'warning', 'info'];
-    const normalizedType = validTypes.includes(type) ? type : 'info';
+      scheduled = true;
 
-    const titles = {
-      success: 'Success!',
-      error: 'Error',
-      warning: 'Warning',
-      info: 'Notice'
-    };
-
-    const alertOptions = {
-      title: titles[normalizedType],
-      html: message,
-      icon: normalizedType,
-      showConfirmButton: true,
-      customClass: {
-        title: 'break-all'
-      }
-    };
-
-    if ($('.swal2-container').length > 0 && Swal.isVisible()) {
-      Swal.hideLoading();
-      Swal.update(alertOptions);
-    } else {
-      Swal.fire(alertOptions);
-    }
-
-    const colors = {
-      success: 'green',
-      warning: 'orange',
-      info: '#38bdf8',
-      error: 'red'
-    };
-
-    console.log(
-      `%c[Redeem itch.io] ${message.replace(/<br\s*\/?>/gi, ' ')}`,
-      `color:${colors[normalizedType]}`
-    );
-  }
-
-  async function processAllPageLinks() {
-    await new Promise((resolve) => {
-      window.setTimeout(resolve, 50);
-    });
-
-    const rawLinks = $(
-      [
-        'a[href*="itch.io"]',
-        ':not(.itch-io-game-link-owned)',
-        ':not([href*="itch.io/b/"])',
-        ':not([href*="itch.io/c/"])'
-      ].join('')
-    ).toArray();
-
-    if (rawLinks.length === 0) {
-      log('No valid itch.io links found on this page.', 'warning');
-      return;
-    }
-
-    let gameLinks = [];
-
-    for (let index = 0; index < rawLinks.length; index += 1) {
-      log(`Scanning link ${index + 1} of ${rawLinks.length}...`);
-
-      const extractedLinks = await getUrlLink(rawLinks[index]);
-      gameLinks.push(...extractedLinks);
-    }
-
-    gameLinks = [...new Set(gameLinks)];
-
-    if (gameLinks.length === 0) {
-      log('No claimable games found in the extracted links.', 'warning');
-      return;
-    }
-
-    for (const gameLink of gameLinks) {
-      await isOwn(gameLink);
-    }
-
-    log('All games processed!', 'success');
-  }
-
-  async function getUrlLink(element) {
-    if ($(element).hasClass('itch-io-game-link-owned')) {
-      return [];
-    }
-
-    const rawUrl =
-      $(element).attr('data-itch-href') ||
-      $(element).attr('href');
-
-    const itchUrl = normalizeItchUrl(rawUrl, window.location.href);
-
-    if (!itchUrl) {
-      return [];
-    }
-
-    log(
-      `Processing game/bundle link:<br>${escapeHtml(itchUrl)}`
-    );
-
-    if (isItchBundleUrl(itchUrl)) {
-      log(
-        `Fetching bundle information...<br>${escapeHtml(itchUrl)}`
-      );
-
-      const data = await httpRequest({
-        url: itchUrl,
-        method: 'GET'
+      window.requestAnimationFrame(() => {
+        scheduled = false;
+        addRedeemBtn();
       });
-
-      if (data.status !== 200) {
-        log('Request error!', 'error');
-        log(data);
-        return [];
-      }
-
-      if (String(data.responseText || '').includes('not_active_notification')) {
-        log('Promotion has ended!', 'error');
-        return [];
-      }
-
-      const extractedGameLinks = [];
-      const games = $(data.responseText).find(
-        '.game_grid_widget.promo_game_grid a.thumb_link.game_link'
-      );
-
-      for (const game of games) {
-        const gameUrl = normalizeItchUrl(
-          $(game).attr('href'),
-          data.finalUrl || itchUrl
-        );
-
-        if (gameUrl && isItchGameUrl(gameUrl)) {
-          extractedGameLinks.push(
-            getGameBaseUrl(gameUrl)
-          );
-        }
-      }
-
-      return extractedGameLinks.filter(Boolean);
-    }
-
-    if (isItchGameUrl(itchUrl)) {
-      const gameBaseUrl = getGameBaseUrl(itchUrl);
-      return gameBaseUrl ? [gameBaseUrl] : [];
-    }
-
-    return [];
-  }
-
-  async function redeemGame(elementOrUrl) {
-    let rawUrl = '';
-
-    if (typeof elementOrUrl === 'string') {
-      rawUrl = elementOrUrl;
-    } else if (elementOrUrl) {
-      if ($(elementOrUrl).hasClass('itch-io-game-link-owned')) {
-        return;
-      }
-
-      rawUrl =
-        $(elementOrUrl).attr('data-itch-href') ||
-        $(elementOrUrl).attr('href') ||
-        '';
-    }
-
-    const itchUrl = normalizeItchUrl(rawUrl, window.location.href);
-
-    if (!itchUrl) {
-      log('Invalid or unsupported itch.io URL.', 'error');
-      return;
-    }
-
-    log(`Current link:<br>${escapeHtml(itchUrl)}`);
-
-    if (isItchBundleUrl(itchUrl)) {
-      log(
-        `Fetching bundle information...<br>${escapeHtml(itchUrl)}`
-      );
-
-      const data = await httpRequest({
-        url: itchUrl,
-        method: 'GET'
-      });
-
-      if (data.status !== 200) {
-        log('Request error!', 'error');
-        log(data);
-        return;
-      }
-
-      if (String(data.responseText || '').includes('not_active_notification')) {
-        log('Promotion has ended!', 'error');
-        return;
-      }
-
-      const games = $(data.responseText).find(
-        '.game_grid_widget.promo_game_grid a.thumb_link.game_link'
-      );
-
-      for (const game of games) {
-        const gameUrl = normalizeItchUrl(
-          $(game).attr('href'),
-          data.finalUrl || itchUrl
-        );
-
-        if (gameUrl) {
-          await isOwn(gameUrl);
-        }
-      }
-
-      log('Finished processing bundle!', 'success');
-      return;
-    }
-
-    if (isItchGameUrl(itchUrl)) {
-      await isOwn(itchUrl);
-      return;
-    }
-
-    log('The supplied URL is not a supported game or bundle.', 'warning');
-  }
-
-  async function isOwn(url) {
-    const itchUrl = normalizeItchUrl(url);
-
-    if (!itchUrl) {
-      log('Invalid itch.io game URL.', 'error');
-      return;
-    }
-
-    log(`Game link:<br>${escapeHtml(itchUrl)}`);
-    log(`Checking ownership...<br>${escapeHtml(itchUrl)}`);
-
-    const data = await httpRequest({
-      url: itchUrl,
-      method: 'GET'
     });
 
-    if (data.status !== 200) {
-      log('Request error!', 'error');
-      log(data);
-      return;
-    }
-
-    const responseText = String(data.responseText || '');
-
-    if (responseText.includes('purchase_banner_inner')) {
-      log('You already own this game!', 'success');
-      return;
-    }
-
-    await purchase(itchUrl);
+    observer.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  async function purchase(url) {
-    try {
-      const purchaseUrl = getPurchaseUrl(url);
-
-      if (!purchaseUrl) {
-        log('Could not build the checkout URL.', 'error');
-        return;
-      }
-
-      log(
-        `Loading checkout page...<br>${escapeHtml(purchaseUrl)}`
-      );
-
-      const data = await httpRequest({
-        url: purchaseUrl,
-        method: 'GET'
-      });
-
-      if (data.status !== 200) {
-        log('Request error!', 'error');
-        log(data);
-        return;
-      }
-
-      const html = $(data.responseText);
-
-      if (!isFreeCheckout(html)) {
-        log(
-          'Price is not $0.00, or the promotion may have ended!',
-          'error'
-        );
-        return;
-      }
-
-      const csrf_token = html.find('[name="csrf_token"]').first().val();
-      const reward_id = html.find('[name="reward_id"]').first().val();
-      const gameBaseUrl = getGameBaseUrl(purchaseUrl);
-
-      if (!csrf_token) {
-        log(
-          'The checkout page did not provide a CSRF token. You may need to log in again.',
-          'error'
-        );
-        return;
-      }
-
-      if (!gameBaseUrl) {
-        log('Could not determine the game URL.', 'error');
-        return;
-      }
-
-      await download(gameBaseUrl, csrf_token, reward_id);
-    } catch (error) {
-      log('Request error!', 'error');
-      log(error);
-    }
-  }
-
-  async function download(url, csrf_token, reward_id) {
-    if (!csrf_token) {
-      log('Missing CSRF token.', 'error');
-      return;
-    }
-
-    log(
-      `Requesting download page...<br>${escapeHtml(url)}`
-    );
-
-    const formData = new URLSearchParams();
-    formData.set('csrf_token', csrf_token);
-
-    if (reward_id) {
-      formData.set('reward_id', reward_id);
-    }
-
-    const data = await httpRequest({
-      url: `${url.replace(/\/+$/, '')}/download_url`,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
-      },
-      data: formData.toString(),
-      responseType: 'json'
-    });
-
-    let response = data.response;
-
-    if (
-      (!response || typeof response !== 'object') &&
-      data.responseText
-    ) {
-      try {
-        response = JSON.parse(data.responseText);
-      } catch (error) {
-        response = null;
-      }
-    }
-
-    if (data.status === 200 && response?.url) {
-      await loadDownload(response.url, url);
-      return;
-    }
-
-    log('Request error!', 'error');
-    log(data);
-  }
-
-  async function loadDownload(downloadUrl, referer) {
-    let resolvedUrl;
-
-    try {
-      resolvedUrl = new URL(downloadUrl, referer).href;
-    } catch (error) {
-      log('Invalid download URL returned by itch.io.', 'error');
-      return;
-    }
-
-    log('Loading download page...');
-
-    const data = await httpRequest({
-      url: resolvedUrl,
-      method: 'GET',
-      headers: {
-        Accept:
-          'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-        Referer: referer
-      }
-    });
-
-    const finalUrl = String(data.finalUrl || resolvedUrl);
-
-    if (/\/register(?:\/|\?|$)/i.test(finalUrl)) {
-      log('Claim failed. Please log in to itch.io first!', 'error');
-      return;
-    }
-
-    if (data.status !== 200 || !data.responseText) {
-      log('Request error!', 'error');
-      log(data);
-      return;
-    }
-
-    const html = $(data.responseText);
-
-    const claimBtn = html.find(
-      [
-        'button.button:contains("Link")',
-        'button.button:contains("Claim")',
-        'button.button:contains("链接")',
-        'button.button:contains("Vincular")',
-        'button.button:contains("Reclamar")'
-      ].join(',')
-    );
-
-    const claimForm = html.find('form[action*="claim-key"]').first();
-
-    const alreadyLinked =
-      /This page is linked|此页面已链接到帐户|Esta página está vinculada/i.test(
-        html.find('div.inner_column').text()
-      );
-
-    const downloadAvailable =
-      html.find('a.button.download_btn[data-upload_id]').length > 0;
-
-    if (alreadyLinked || downloadAvailable) {
-      log('Successfully claimed!', 'success');
-    } else if (claimForm.length > 0) {
-      const actionUrl = claimForm.attr('action');
-      const csrf_token = claimForm
-        .find('input[name="csrf_token"]')
-        .first()
-        .val();
-
-      await claimGame(actionUrl, csrf_token, finalUrl);
-    } else if (
-      claimBtn.length > 0 &&
-      claimBtn.first().closest('form').length > 0
-    ) {
-      const actionForm = claimBtn.first().closest('form');
-      const actionUrl = actionForm.attr('action');
-      const csrf_token = actionForm
-        .find('input[name="csrf_token"]')
-        .first()
-        .val();
-
-      await claimGame(actionUrl, csrf_token, finalUrl);
-    } else {
-      log(
-        'The download page loaded, but no claim form or ownership confirmation was found.',
-        'warning'
-      );
-    }
-
-    if (typeof checkItchGame === 'function') {
-      checkItchGame();
-    }
-  }
-
-  async function claimGame(action, token, referer) {
-    if (!action) {
-      log('The claim form did not provide an action URL.', 'error');
-      return;
-    }
-
-    if (!token) {
-      log('The claim form did not provide a CSRF token.', 'error');
-      return;
-    }
-
-    let actionUrl;
-
-    try {
-      actionUrl = new URL(action, referer).href;
-    } catch (error) {
-      log('The claim form returned an invalid URL.', 'error');
-      return;
-    }
-
-    log('Claiming game...');
-
-    const formData = new URLSearchParams();
-    formData.set('csrf_token', token);
-
-    const data = await httpRequest({
-      url: actionUrl,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        Referer: referer
-      },
-      data: formData.toString()
-    });
-
-    const finalUrl = String(data.finalUrl || actionUrl);
-
-    if (/\/register(?:\/|\?|$)/i.test(finalUrl)) {
-      log('Please log in to itch.io first!', 'error');
-      return;
-    }
-
-    if (data.status !== 200 || !data.responseText) {
-      log('Request error!', 'error');
-      log(data);
-      return;
-    }
-
-    const html = $(data.responseText);
-
-    const linked =
-      /This page is linked|此页面已链接到帐户|Esta página está vinculada/i.test(
-        html.find('div.inner_column').text()
-      );
-
-    const downloadAvailable =
-      html.find('a.button.download_btn[data-upload_id]').length > 0;
-
-    if (linked || downloadAvailable) {
-      log('Successfully claimed!', 'success');
-    } else {
-      log(
-        'The claim request completed, but ownership could not be confirmed.',
-        'warning'
-      );
-    }
-  }
-
-  function httpRequest(options, attempt = 0) {
-    const maxAttempts = 3;
-
-    return new Promise((resolve, reject) => {
-      const requestOptions = {
-        ...options,
-        timeout: 30000,
-        onload: resolve,
-        onerror: reject,
-        ontimeout: reject,
-        onabort: reject
-      };
-
-      GM_xmlhttpRequest(requestOptions);
-    }).catch(async (error) => {
-      if (attempt + 1 >= maxAttempts) {
-        return {
-          status: 0,
-          response: null,
-          responseText: '',
-          finalUrl: options.url,
-          error
-        };
-      }
-
-      await new Promise((resolve) => {
-        window.setTimeout(resolve, 500 * (attempt + 1));
-      });
-
-      return httpRequest(options, attempt + 1);
-    });
-  }
+  /* ------------------------------------------------------------------ */
+  /* Banner                                                              */
+  /* ------------------------------------------------------------------ */
 
   function createStartupBanner() {
     if (
@@ -1100,61 +1322,35 @@
       <button
         id="df-claim-all-btn"
         type="button"
-        style="
-          width:100%;
-          background:#fa4056;
-          color:#fff;
-          border:none;
-          padding:6px 10px;
-          border-radius:6px;
-          font-size:11px;
-          font-weight:bold;
-          cursor:pointer;
-          margin-bottom:8px;
-          transition:all 0.2s;
-          display:flex;
-          align-items:center;
-          justify-content:center;
-          gap:6px;
-        "
+        style="width:100%;background:#fa4056;color:#fff;border:none;padding:6px 10px;border-radius:6px;font-size:11px;font-weight:bold;cursor:pointer;margin-bottom:8px;display:flex;align-items:center;justify-content:center;gap:6px;"
       >
         <span id="df-btn-text">⚡ Claim All Links On Page</span>
       </button>
 
-      <div style="display:flex;gap:6px;justify-content:center;">
-        <a
-          href="https://buymeacoffee.com/drowfear"
-          target="_blank"
-          rel="noopener noreferrer"
-          style="
-            background:#FF813F;
-            color:#fff;
-            padding:4px 8px;
-            border-radius:6px;
-            text-decoration:none;
-            font-size:11px;
-            font-weight:bold;
-          "
+      <div style="display:flex;align-items:center;justify-content:center;gap:6px;margin-bottom:8px;font-size:10.5px;color:#a1a1aa;">
+        <label for="df-speed-select">Speed:</label>
+        <select
+          id="df-speed-select"
+          style="background:#27272a;color:#f4f4f5;border:1px solid #3f3f46;border-radius:4px;font-size:10.5px;padding:2px 4px;"
         >
-          ☕ Coffee
-        </a>
+          <option value="3">Safe (3)</option>
+          <option value="6" selected>Fast (6)</option>
+          <option value="10">Turbo (10)</option>
+        </select>
+        <button
+          id="df-toggle-panel"
+          type="button"
+          style="background:#27272a;color:#f4f4f5;border:1px solid #3f3f46;border-radius:4px;font-size:10.5px;padding:2px 6px;cursor:pointer;"
+        >
+          📋 Log
+        </button>
+      </div>
 
-        <a
-          href="https://ko-fi.com/drowfear"
-          target="_blank"
-          rel="noopener noreferrer"
-          style="
-            background:#FF5E5B;
-            color:#fff;
-            padding:4px 8px;
-            border-radius:6px;
-            text-decoration:none;
-            font-size:11px;
-            font-weight:bold;
-          "
-        >
-          ❤️ Ko-fi
-        </a>
+      <div style="display:flex;gap:6px;justify-content:center;">
+        <a href="https://buymeacoffee.com/drowfear" target="_blank" rel="noopener noreferrer"
+          style="background:#FF813F;color:#fff;padding:4px 8px;border-radius:6px;text-decoration:none;font-size:11px;font-weight:bold;">☕ Coffee</a>
+        <a href="https://ko-fi.com/drowfear" target="_blank" rel="noopener noreferrer"
+          style="background:#FF5E5B;color:#fff;padding:4px 8px;border-radius:6px;text-decoration:none;font-size:11px;font-weight:bold;">❤️ Ko-fi</a>
       </div>
 
       <button
@@ -1162,37 +1358,32 @@
         type="button"
         aria-label="Close support banner"
         title="Close"
-        style="
-          position:absolute;
-          top:6px;
-          right:8px;
-          background:none;
-          border:none;
-          color:#71717a;
-          cursor:pointer;
-          font-size:14px;
-          font-weight:bold;
-        "
-      >
-        ✕
-      </button>
+        style="position:absolute;top:6px;right:8px;background:none;border:none;color:#71717a;cursor:pointer;font-size:14px;font-weight:bold;"
+      >✕</button>
     `;
 
     const appendBanner = () => {
-      if (!document.body || document.getElementById('df-support-banner')) {
-        return;
-      }
+      if (!document.body || document.getElementById('df-support-banner')) return;
 
       document.body.appendChild(banner);
+      ProgressPanel.build();
 
-      const closeButton = banner.querySelector('#df-close-banner');
-      const claimButton = banner.querySelector('#df-claim-all-btn');
-      const buttonText = banner.querySelector('#df-btn-text');
-
-      closeButton.addEventListener('click', () => {
+      banner.querySelector('#df-close-banner').addEventListener('click', () => {
         sessionStorage.setItem('df_banner_closed', 'true');
         banner.remove();
       });
+
+      banner.querySelector('#df-speed-select').addEventListener('change', (event) => {
+        CONFIG.concurrency = Number(event.target.value) || 6;
+      });
+
+      banner.querySelector('#df-toggle-panel').addEventListener('click', () => {
+        const panel = document.getElementById('df-progress-panel');
+        if (panel) panel.classList.toggle('df-visible');
+      });
+
+      const claimButton = banner.querySelector('#df-claim-all-btn');
+      const buttonText = banner.querySelector('#df-btn-text');
 
       claimButton.addEventListener('click', async () => {
         claimButton.disabled = true;
@@ -1200,22 +1391,11 @@
         claimButton.style.cursor = 'not-allowed';
         buttonText.textContent = '⏳ Processing...';
 
-        Swal.fire({
-          title: 'Scanning Page...',
-          html: 'Searching for valid itch.io links and processing claims.',
-          icon: 'info',
-          allowOutsideClick: false,
-          showConfirmButton: false,
-          didOpen: () => {
-            Swal.showLoading();
-          }
-        });
-
         try {
           await processAllPageLinks();
         } catch (error) {
           console.error('[Redeem itch.io]', error);
-          log('An error occurred during extraction.', 'error');
+          notify('An error occurred during extraction.', 'error');
         } finally {
           claimButton.disabled = false;
           claimButton.style.opacity = '1';
@@ -1228,9 +1408,7 @@
     if (document.body) {
       appendBanner();
     } else {
-      window.addEventListener('DOMContentLoaded', appendBanner, {
-        once: true
-      });
+      window.addEventListener('DOMContentLoaded', appendBanner, { once: true });
     }
   }
 
