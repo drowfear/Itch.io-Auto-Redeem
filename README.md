@@ -1,47 +1,63 @@
-# Itch.io Auto-Redeem (English)
+# Redeem itch.io (English)
 
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support-yellow.svg?style=for-the-badge&logo=buy-me-a-coffee)](https://buymeacoffee.com/drowfear)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Support-ff5e5b.svg?style=for-the-badge&logo=ko-fi)](https://ko-fi.com/drowfear)
 
-An automated Tampermonkey script designed to seamlessly claim free games, bundles, and claimable keys on **itch.io** and supported external deal aggregation platforms.
+An automated Tampermonkey userscript designed to scan, expand, and batch-claim free games, promotional bundles, and claimable keys on **itch.io** and external deal aggregation platforms.
 
 ---
 
-## Features
-- **Background Claiming:** Automatically handles $0.00 purchases and claims games in the background without manual clicks.
-- **External Deal Site Support:** Adds quick "Claim" buttons directly onto third-party communities and deal trackers.
-- **Auto-Download Link Linking:** Automatically resolves and links game download pages to your account.
-- **Fully Localized:** Clean English interface and notification system powered by SweetAlert2.
+## Key Features
+
+- **⚡ Live Progress Panel & Batch Claiming:** Includes a floating UI panel with real-time status updates (Claimed, Already Owned, Skipped, Errors) and speed selection (*Safe / Fast / Turbo*).
+- **🚀 Parallel Execution:** Claims multiple games simultaneously in the background without opening dozens of tabs.
+- **📦 Bundle Expansion:** Automatically detects itch.io promotional bundle links (`/s/`), extracts all individual games, and claims them sequentially.
+- **🌐 Third-Party Deal Tracker Support:** Automatically injects quick "Claim" buttons next to itch.io links on deal trackers and community forums.
+- **🔑 Direct Key Resolution:** Bypasses manual checkout steps by interacting directly with the `download_url` and CSRF endpoints.
+- **⚙️ Tampermonkey Menu Command:** Integrated options in the extension menu to batch-claim all itch.io links present on the current active tab.
 
 ---
 
 ## Supported Websites
+
 * `itch.io` (and subdomains)
-* Keylol
-* SteamGifts (Discussions)
-* Reddit (`r/`)
-* IsThereAnyDeal (`new.isthereanydeal.com`)
-* FreeGames.Codes
-* ItchClaim / ShaiGrOrb trackers
+* Keylol (`keylol.com`)
+* SteamGifts (`steamgifts.com/discussion/*`)
+* Reddit (`reddit.com/r/*`)
+* ItchClaim (`itchclaim.tmbpeter.com`)
+* ShaiGrOrb Tracker (`shaigrorb.github.io/freetchio/`)
 
 ---
 
 ## Installation
 
-1. Make sure you have a userscript manager installed in your browser:
+1. Install a userscript manager extension in your web browser:
    * **[Tampermonkey](https://www.tampermonkey.net/)** (Recommended)
-2. Click on the raw script link or download it from the repository:
-   * **[Install Script Directly (redeem-itch.user.js)](https://raw.githubusercontent.com/drowfear/Itch.io-Auto-Redeem/main/redeem-itch.user.js)**
-3. Tampermonkey will automatically prompt you to **Install** or **Update** the script.
+2. Install the userscript directly from the repository:
+   * **[Install Script (redeem-itch.user.js)](https://raw.githubusercontent.com/drowfear/Itch.io-Auto-Redeem/main/redeem-itch.user.js)**
+3. Confirm the installation when prompted by Tampermonkey.
+
+---
+
+## Usage Guide
+
+1. **On itch.io / Bundle pages:** Click the *"Claim in Background"* button added to store/bundle pages, or use the *"⚡ Claim All Links On Page"* button from the floating banner.
+2. **On external sites (Reddit, Keylol, etc.):** Click the green **"Claim"** buttons injected next to itch.io links.
+3. **Speed Controls:** Adjust the concurrency setting in the top banner:
+   * **Safe (3):** Low rate-limit risk.
+   * **Fast (6):** Balanced performance (Default).
+   * **Turbo (10):** Maximum batch speed.
 
 ---
 
 ## Support My Work
-If you find this script useful and want to support my projects:
+
+If this script saved you time and you'd like to support future updates:
 * ☕ **[Buy Me a Coffee](https://buymeacoffee.com/drowfear)**
 * ❤️ **[Ko-fi](https://ko-fi.com/drowfear)**
 
 ---
 
 ## License
-This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
+
+Distributed under the **MIT License**. See `LICENSE` for details.
